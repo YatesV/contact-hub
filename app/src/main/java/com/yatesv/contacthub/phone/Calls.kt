@@ -27,6 +27,8 @@ data class CallUi(
     val speaker: Boolean,
     val onHold: Boolean,
     val outgoing: Boolean,
+    /** Carrier said the caller ID failed STIR/SHAKEN verification */
+    val verificationFailed: Boolean = false,
 )
 
 /** Keeps track of the active call for the call screen. */
@@ -49,11 +51,19 @@ object CallManager {
     }
 
     fun removed(c: Call) {
+        // Offer a call note for calls that connected
+        lastConnected?.let { (num, at) ->
+            lastConnected = null
+            service?.let { svc -> runCatching { com.yatesv.contacthub.engine.CallNotes.afterCall(svc, num, (System.currentTimeMillis() - at) / 1000) } }
+        }
         c.unregisterCallback(callback)
         calls -= c
         val next = call
         if (next == null) { ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) } } else publish(next)
     }
+
+    /** Number + time the current call connected (kept after the call screen clears, for the call note). */
+    private var lastConnected: Pair<String, Long>? = null
 
     private fun publish(c: Call) {
         val d = c.details
@@ -68,7 +78,9 @@ object CallManager {
             speaker = audio?.route == CallAudioState.ROUTE_SPEAKER,
             onHold = st == Call.STATE_HOLDING,
             outgoing = d.callDirection == Call.Details.DIRECTION_OUTGOING,
+            verificationFailed = d.callerNumberVerificationStatus == android.telecom.Connection.VERIFICATION_STATUS_FAILED,
         )
+        ui.value?.let { if (it.connectedAt > 0 && it.number.isNotBlank()) lastConnected = it.number to it.connectedAt }
         service?.let { svc -> if (st == Call.STATE_RINGING) showRinging(svc, number) else NotificationManagerCompat.from(svc).cancel(NOTIF_ID) }
         if (st == Call.STATE_DISCONNECTED && calls.none { it.state != Call.STATE_DISCONNECTED }) {
             ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) }
@@ -89,7 +101,8 @@ object CallManager {
     private const val NOTIF_ID = 4242
 
     private fun showRinging(ctx: Context, number: String) {
-        val name = Hub.contacts.cached(number)?.name ?: com.yatesv.contacthub.data.Phone.pretty(number)
+        val known = Hub.contacts.cached(number)?.name
+        val name = known ?: (if (Hub.orbit.isReportedSpam(number)) "⚠️ Spam · " else "") + com.yatesv.contacthub.data.Phone.pretty(number)
         val full = PendingIntent.getActivity(ctx, 1, Intent(ctx, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         fun action(a: String) = PendingIntent.getBroadcast(ctx, a.hashCode(), Intent(ctx, ActionReceiver::class.java).setAction(a),
@@ -120,7 +133,7 @@ object CallManager {
     }
 }
 
-/** Android talks to this when Contact Hub is the default phone app. */
+/** Android talks to this when Orbit is the default phone app. */
 class CallService : InCallService() {
     override fun onCreate() { super.onCreate(); CallManager.service = this }
     override fun onDestroy() { if (CallManager.service === this) CallManager.service = null; super.onDestroy() }

@@ -35,7 +35,7 @@ data class SendResult(val ok: Boolean, val route: Route, val error: String = "")
  *  2. the accessibility service taps Send inside it, and checks the box emptied,
  *  3. if that fails: plain SMS for 1-on-1 chats, and you're told it fell back.
  *
- * Contact Hub mode (Contact Hub is the default texting app): SMS for 1-on-1, MMS for groups and photos.
+ * Orbit mode (Orbit is the default texting app): SMS for 1-on-1, MMS for groups and photos.
  *
  * Never sends twice: it only falls back when the earlier step definitely didn't send.
  */
@@ -76,7 +76,7 @@ object Sender {
         val dao = Hub.db.dao()
         HubLog.d("Send", "start conv=${convKey.length}ch members=${addresses.size} len=${body.length} defaultSms=${HubSms.isDefault(ctx)} engine=${s.engine} replyBtn=${Hub.replies.containsKey(convKey)} a11y=${MessagesAccessibility.running()} drive=$allowDriving")
 
-        // Contact Hub mode: we are the texting app
+        // Orbit mode: we are the texting app
         if (HubSms.isDefault(ctx)) {
             if (addresses.isEmpty()) return SendResult(false, Route.NONE, "Can't find the numbers for this chat")
             val ok = if (addresses.size == 1) HubSms.sendSms(ctx, addresses[0], body) else HubSms.sendMms(ctx, addresses, body)
@@ -116,7 +116,7 @@ object Sender {
                     if (r.chatType.isNotEmpty()) Hub.setRcsState(convKey, r.chatType)
                     if (r.uncertain) {
                         // Send was already tapped: never fall back to SMS here, it could go out twice
-                        Notifier.status(ctx, 7102, "Check Google Messages", "Contact Hub tapped Send but couldn't confirm it went. Open Google Messages to check.")
+                        Notifier.status(ctx, 7102, "Check Google Messages", "Orbit tapped Send but couldn't confirm it went. Open Google Messages to check.")
                         return SendResult(false, Route.NONE, "Couldn't confirm it sent. Check Google Messages before trying again.")
                     }
                     if (r.clicked) {
@@ -132,7 +132,7 @@ object Sender {
         HubLog.d("Send", "falling back: $why")
         // 3. Plain SMS, 1-on-1 only. Splitting a group into separate texts would look wrong.
         if (addresses.size != 1) {
-            val err = "Group text not sent: $why. Fix it in Settings > Setup, or switch to Contact Hub mode."
+            val err = "Group text not sent: $why. Fix it in Settings > Setup, or switch to Orbit mode."
             Notifier.status(ctx, 7101, "Group text not sent", err)
             return SendResult(false, Route.NONE, err)
         }
@@ -173,7 +173,7 @@ object Sender {
         Pdu.Part("image/jpeg", out, "photo${System.nanoTime() % 100000}.jpg")
     }.getOrNull()
 
-    /** Photos/videos: through the Messages app (Google Messages mode) or as MMS (Contact Hub mode). */
+    /** Photos/videos: through the Messages app (Google Messages mode) or as MMS (Orbit mode). */
     suspend fun sendMedia(ctx: Context, convKey: String, uris: List<Uri>, caption: String): SendResult {
         val addresses = addressesOf(convKey)
         if (addresses.isEmpty()) return SendResult(false, Route.NONE, "Can't find the numbers for this chat")
@@ -183,7 +183,7 @@ object Sender {
             return if (HubSms.sendMms(ctx, addresses, caption.trim(), parts)) SendResult(true, Route.MMS) else SendResult(false, Route.NONE, "Couldn't send")
         }
         val pkg = messagesPkg(ctx, convKey) ?: return SendResult(false, Route.NONE, "Install Google Messages to send photos")
-        if (!MessagesAccessibility.running()) return SendResult(false, Route.NONE, "Turn on the Contact Hub accessibility service to send photos")
+        if (!MessagesAccessibility.running()) return SendResult(false, Route.NONE, "Turn on the Orbit accessibility service to send photos")
         val r = MessagesAccessibility.sendThrough(ctx, pkg, addresses, caption, uris, convKey = convKey)
         return if (r.clicked) {
             Hub.changed(); SendResult(true, Route.MESSAGES_APP)
@@ -197,7 +197,7 @@ object Sender {
      */
     suspend fun trySendReaction(ctx: Context, r: Reaction): String? {
         if (!r.pending || !r.fromMe) return null
-        if (HubSms.isDefault(ctx)) return "Contact Hub mode has no RCS"
+        if (HubSms.isDefault(ctx)) return "Orbit mode has no RCS"
         if (!MessagesAccessibility.running()) return "accessibility service is off"
         val pkg = messagesPkg(ctx, r.convKey) ?: return "Google Messages isn't installed"
         val addresses = addressesOf(r.convKey).ifEmpty { return "no numbers for this chat" }
@@ -212,7 +212,7 @@ object Sender {
     private val lastRetry = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
-     * Retries this chat's waiting reactions when you open it in Contact Hub and it's known to be on RCS.
+     * Retries this chat's waiting reactions when you open it in Orbit and it's known to be on RCS.
      * Never in the background, so Google Messages doesn't pop up out of nowhere.
      */
     suspend fun retryPendingFor(ctx: Context, convKey: String) {

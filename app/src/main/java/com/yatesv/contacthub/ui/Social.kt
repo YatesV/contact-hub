@@ -174,7 +174,7 @@ fun profileFromUrl(s: Social, url: String): String? {
 }
 
 /**
- * Find someone's Instagram / Snapchat / TikTok inside Contact Hub: search for their name,
+ * Find someone's Instagram / Snapchat / TikTok inside Orbit: search for their name,
  * tap their profile, and it's linked to the contact.
  */
 @SuppressLint("SetJavaScriptEnabled")

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_desc">Lets Contact Hub send your texts and reactions through Google Messages or Samsung Messages, so they go out over RCS exactly like they would from those apps. It only works inside those two apps.</string>
+    <string name="accessibility_desc">Lets Orbit send your texts and reactions through Google Messages or Samsung Messages, so they go out over RCS exactly like they would from those apps. It only works inside those two apps.</string>
     <string name="widget_desc">Favorite contacts and the auto-reply switch</string>
+    <string name="widget_person_desc">One person: their photo, your last message, tap to text or call</string>
 </resources>

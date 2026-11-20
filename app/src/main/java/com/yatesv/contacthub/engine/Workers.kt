@@ -35,6 +35,8 @@ class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
             if (dao.claimScheduled(s.id) == 0) continue
             val r = Sender.send(applicationContext, s.convKey, s.body, s.addresses.split(',').filter { it.isNotBlank() })
             dao.setScheduled(s.id, if (r.ok) "sent" else "failed")
+            // Repeating texts: schedule the next one (even if this one failed, so a yearly text isn't lost)
+            runCatching { RecurringTexts.afterSent(s) }
             if (!r.ok) Notifier.status(applicationContext, s.id.toInt(), "Scheduled message not sent", r.error)
         }
         Hub.changed()
@@ -90,7 +92,7 @@ class Life360Worker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p)
     }
 }
 
-/** Daily backup of everything Contact Hub stores, plus a copy of your texts. Keeps the last 7. */
+/** Daily backup of everything Orbit stores, plus a copy of your texts. Keeps the last 7. */
 class BackupWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
     override suspend fun doWork(): Result = runCatching {
         Backup.writeDaily(applicationContext); Result.success()
@@ -135,6 +137,7 @@ object Backup {
             put("sms", arr(runCatching { Hub.sms.allSmsForBackup() }.getOrDefault(emptyList()).map { JSONObject(it) }))
             MockStore.load()
             put("mockFavorites", org.json.JSONArray(com.yatesv.contacthub.data.MockItem.listToJson(MockStore.favorites.value)))
+            put("orbit", Hub.orbit.exportJson())
             put("mockRecent", org.json.JSONArray(com.yatesv.contacthub.data.MockItem.listToJson(MockStore.history.value)))
         }
     }
@@ -159,16 +162,16 @@ object Backup {
         Hub.settings.update { it.copy(lastBackup = System.currentTimeMillis()) }
     }
 
-    /** Restores Contact Hub's own data. Texts themselves stay in the phone's SMS database. */
+    /** Restores Orbit's own data. Texts themselves stay in the phone's SMS database. */
     suspend fun restore(ctx: Context, uri: Uri): String {
         val text = ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return "Couldn't open file"
         val j = JSONObject(text)
-        if (j.optString("app") != "contact-hub") return "That isn't a Contact Hub backup"
+        if (j.optString("app") != "contact-hub") return "That isn't a Orbit backup"
         val dao = Hub.db.dao()
         fun JSONObject.objs(k: String) = optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.orEmpty()
         j.optJSONObject("settings")?.let { sj ->
             val keep = Hub.settings.value
-            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, mapboxToken = keep.mapboxToken, onboarded = true) }
+            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, mapboxToken = keep.mapboxToken, aiKey = keep.aiKey, onboarded = true) }
         }
         j.objs("meta").forEach { o -> dao.putMeta(ConvMeta(o.getString("key"), o.optBoolean("pinned"), o.optBoolean("archived"),
             o.optBoolean("muted"), o.optBoolean("hidden"), o.optLong("folderId"), o.optString("customName"), o.optString("photoUri"),
@@ -189,6 +192,7 @@ object Backup {
         j.objs("extras").forEach { o -> dao.putExtra(ContactExtra(o.getString("phoneKey"), o.optString("instagram"), o.optString("snapchat"),
             o.optString("tiktok"), o.optString("notes"), o.optString("birthday"), o.optString("life360Id"), o.optBoolean("priority"), o.optInt("groupColor"))) }
         j.objs("groups").forEach { o -> dao.putGroup(GroupInfo(o.getString("convKey"), o.optString("name"), o.optString("photoUri"))) }
+        j.optJSONObject("orbit")?.let { Hub.orbit.importJson(it) }
         MockStore.load()
         j.optJSONArray("mockFavorites")?.let { a ->
             val have = MockStore.favorites.value.map { it.id }.toSet()

@@ -30,23 +30,27 @@ jobs:
           chmod +x gradlew
           ./gradlew testDebugUnitTest assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk ContactHub.apk
+          # Same app under its new name. ContactHub.apk stays so older versions keep auto-updating.
+          cp app/build/outputs/apk/release/app-release.apk Orbit.apk
 
       - name: Upload as build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ContactHub-apk
-          path: ContactHub.apk
+          path: |
+            Orbit.apk
+            ContactHub.apk
 
       # Fixed link you can open on your phone:
-      # https://github.com/YatesV/contact-hub/releases/latest/download/ContactHub.apk
+      # https://github.com/YatesV/contact-hub/releases/latest/download/Orbit.apk
       - name: Publish to "latest" release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest ContactHub.apk \
+          gh release create latest Orbit.apk ContactHub.apk \
             --target "${{ github.sha }}" \
-            --title "Contact Hub build #${{ github.run_number }}" \
-            --notes "Download **ContactHub.apk** below and open it on your phone to install. Updates install over the old version and keep your data." \
+            --title "Orbit build #${{ github.run_number }}" \
+            --notes "Download **Orbit.apk** below and open it on your phone to install. Updates install over the old version and keep your data." \
             --latest

@@ -31,6 +31,9 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -103,6 +106,9 @@ fun SettingsHome() {
             SettingRow("Notifications", "Previews, sounds, priority contacts", Icons.Default.Notifications, onClick = { Nav.go(Screen.SettingsPage("notifications")) })
             SettingRow("Privacy & security", "App lock, hidden chats, blocked numbers", Icons.Default.Lock, onClick = { Nav.go(Screen.SettingsPage("privacy")) })
             SettingRow("Life360", "Sign in, refresh rate", Icons.Default.LocationOn, onClick = { Nav.go(Screen.SettingsPage("life360")) })
+            SettingRow("AI & smart replies", "Reply suggestions, catch-up summaries, translation, birthdays", androidx.compose.material.icons.Icons.Default.AutoAwesome, onClick = { Nav.go(Screen.SettingsPage("ai")) })
+            SettingRow("Arrival texts", "Text someone automatically when you get somewhere", androidx.compose.material.icons.Icons.Default.Place, onClick = { Nav.go(Screen.SettingsPage("arrivals")) })
+            SettingRow("Text from your laptop", "Open Orbit in a browser on the same Wi-Fi", androidx.compose.material.icons.Icons.Default.Laptop, onClick = { Nav.go(Screen.SettingsPage("laptop")) })
             SettingRow("Backup", "Daily backup, Google Drive, export, restore", Icons.Default.Backup, onClick = { Nav.go(Screen.SettingsPage("backup")) })
             }
             SettingsGroup {
@@ -121,7 +127,8 @@ fun SettingsHome() {
 fun SettingsPage(page: String) {
     val title = mapOf("setup" to "Permissions checklist", "look" to "Look & feel", "messaging" to "Messaging", "notifications" to "Notifications",
         "privacy" to "Privacy & security", "life360" to "Life360", "backup" to "Backup", "about" to "About & updates", "motion" to "Motion & feel",
-        "developer" to "Developer", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses")[page] ?: "Settings"
+        "developer" to "Developer", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
+        "ai" to "AI & smart replies", "arrivals" to "Arrival texts", "laptop" to "Text from your laptop")[page] ?: "Settings"
     Scaffold(topBar = {
         TopAppBar(title = { Text(title) }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
     }) { pad ->
@@ -138,6 +145,9 @@ fun SettingsPage(page: String) {
                 "developer" -> DeveloperPage()
                 "privacydata" -> PrivacyDataPage()
                 "licenses" -> LicensesPage()
+                "ai" -> AiPage()
+                "arrivals" -> ArrivalsPage()
+                "laptop" -> LaptopPage()
                 else -> AboutPage()
             }
             Spacer(Modifier.height(40.dp))
@@ -163,7 +173,7 @@ fun SetupContent() {
         Check("RCS sender (accessibility)", if (MessagesAccessibility.enabledInSettings(ctx) && !MessagesAccessibility.running()) "On but not running: toggle it off and on" else "Taps Send in Google Messages for you", MessagesAccessibility.running()) { openAccessibility(ctx) }
         Check("Notification access", "Sees RCS messages, replies through Google Messages", listenerOn(ctx)) { openListener(ctx) }
         Check("Unlock restricted settings", "Only needed if the switches above are greyed out: ⋮ → Allow restricted settings", MessagesAccessibility.running() && listenerOn(ctx)) { openAppInfo(ctx) }
-    } else Check("Default texting app", "Contact Hub mode is on", true) {}
+    } else Check("Default texting app", "Orbit mode is on", true) {}
     if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) Check("Default phone app (optional)", "Call screen and blocking", rm.isRoleHeld(RoleManager.ROLE_DIALER)) {
         role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER))
     }
@@ -198,8 +208,10 @@ private fun LookPage() {
             set { it.copy(wallpaper = uri.toString()) }
         }
     }
+    SectionTitle("App icon")
+    AppIconPicker()
     SectionTitle("Theme")
-    ChoiceRow("Style preset", listOf("hub" to "Contact Hub", "google" to "Google Messages", "samsung" to "Samsung", "imessage" to "iMessage", "custom" to "Custom"), s.preset) { v ->
+    ChoiceRow("Style preset", listOf("hub" to "Orbit", "google" to "Google Messages", "samsung" to "Samsung", "imessage" to "iMessage", "custom" to "Custom"), s.preset) { v ->
         set { it.copy(preset = v, bubbleShape = "", sentColor = 0, recvColor = 0, sentText = 0, recvText = 0) }
     }
     ChoiceRow("Dark mode", listOf("system" to "System", "light" to "Light", "dark" to "Dark", "amoled" to "Pure black"), s.darkMode) { v -> set { it.copy(darkMode = v) } }
@@ -275,13 +287,13 @@ private fun MessagingPage() {
             set { it.copy(hideMethod = v) }
         }
         Text(
-            "Tiny pop-up: Google Messages opens as a small Samsung window, Contact Hub stays fully usable. Live mirror: an animated copy of the chat covers it for a second. " +
+            "Tiny pop-up: Google Messages opens as a small Samsung window, Orbit stays fully usable. Live mirror: an animated copy of the chat covers it for a second. " +
                 "Snapshot: a frozen picture of the screen covers it for a second (looks exactly the same). " +
                 (if (s.hideWinner.isNotBlank()) "Auto is using: ${s.hideWinner}. " else "Auto uses Snapshot until the self-test finds something better. ") +
                 "Test them in Settings → Developer.",
             Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    Text("Stealth rule: nothing Contact Hub sends looks different from your normal Messages app. No branding, no duplicate texts, reactions and edits only over RCS, and group names/photos stay on your phone.",
+    Text("Stealth rule: nothing Orbit sends looks different from your normal Messages app. No branding, no duplicate texts, reactions and edits only over RCS, and group names/photos stay on your phone.",
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("Reactions")
     SwitchRow("Turn \"Liked …\" texts into reactions", "When iPhone or SMS contacts react, show a real reaction instead of the text", s.convertReactions) { v -> set { it.copy(convertReactions = v) } }
@@ -310,7 +322,7 @@ private fun MessagingPage() {
 private fun NotificationsPage() {
     val ctx = LocalContext.current
     val s by Hub.settings.flow.collectAsState()
-    SwitchRow("Contact Hub shows message notifications", "Replaces the Google Messages notification with Contact Hub's (needs notification access)", s.handleNotifications) { v ->
+    SwitchRow("Orbit shows message notifications", "Replaces the Google Messages notification with Orbit's (needs notification access)", s.handleNotifications) { v ->
         set { it.copy(handleNotifications = v) }
     }
     SwitchRow("Hide message previews", "Notifications just say \"New message\"", s.hidePreviews) { v -> set { it.copy(hidePreviews = v) } }
@@ -328,11 +340,12 @@ private fun PrivacyPage() {
     var pinDialog by remember { mutableStateOf(false) }
     var blocked by remember { mutableStateOf(emptyList<String>()) }
     LaunchedEffect(Unit) { blocked = Hub.contacts.blockedList() }
-    SwitchRow("App lock", "Ask for fingerprint or PIN to open Contact Hub", s.appLock, Icons.Default.Lock) { v ->
+    SwitchRow("App lock", "Ask for fingerprint or PIN to open Orbit", s.appLock, Icons.Default.Lock) { v ->
         if (v && s.pinHash.isBlank() && !(ctx is MainActivity && canUseBiometric(ctx))) pinDialog = true
         set { it.copy(appLock = v) }
     }
     SwitchRow("Use fingerprint / face", null, s.useBiometric) { v -> set { it.copy(useBiometric = v) } }
+    SwitchRow("Shake to hide", "Shake your phone twice while Orbit is open: it jumps to your home screen and locks (if App lock is on)", s.panicShake) { v -> set { it.copy(panicShake = v) } }
     SettingRow(if (s.pinHash.isBlank()) "Set PIN" else "Change PIN", "Backup when fingerprint isn't available", Icons.Default.Security, onClick = { pinDialog = true })
     ChoiceRow("Lock after leaving the app", listOf("0" to "Right away", "30" to "30 sec", "60" to "1 min", "300" to "5 min"), s.lockAfterSec.toString()) { v ->
         set { it.copy(lockAfterSec = v.toInt()) }
@@ -375,7 +388,7 @@ private fun Life360Page() {
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
 
-    Text("Life360 has no official way for other apps to connect. Contact Hub uses the same unofficial connection Home Assistant uses, so it can break if Life360 changes things. The Open Life360 button always works. Your login stays on this phone.",
+    Text("Life360 has no official way for other apps to connect. Orbit uses the same unofficial connection Home Assistant uses, so it can break if Life360 changes things. The Open Life360 button always works. Your login stays on this phone.",
         Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (status.isNotBlank()) Banner(status) {}
     if (s.l360Token.isNotBlank()) {
@@ -392,7 +405,7 @@ private fun Life360Page() {
         SettingRow("Sign out of Life360", onClick = { Hub.l360.signOut(); set { it.copy(l360Token = "") }; HubApp.scheduleWork(Hub.app) })
     } else {
         Button({ Nav.go(Screen.Life360SignIn) }, Modifier.fillMaxWidth().padding(16.dp)) { Text("Sign in with Life360") }
-        Text("Opens Life360's real sign-in page inside Contact Hub. If that page doesn't work, use one of these instead:",
+        Text("Opens Life360's real sign-in page inside Orbit. If that page doesn't work, use one of these instead:",
             Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SectionTitle("Option 2: Email/phone + password")
         OutlinedTextField(user, { user = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("Life360 email or phone") }, singleLine = true)
@@ -464,9 +477,9 @@ private fun BackupPage() {
 private fun AboutPage() {
     UpdateCard()
     HorizontalDivider()
-    SettingRow("How RCS works here", "Google Messages stays your default texting app. Contact Hub sends through its reply button or taps Send in it for you, so everything really comes from Google Messages. If that fails for a 1-on-1 chat, it sends a normal SMS. Group texts are never split into separate texts.")
+    SettingRow("How RCS works here", "Google Messages stays your default texting app. Orbit sends through its reply button or taps Send in it for you, so everything really comes from Google Messages. If that fails for a 1-on-1 chat, it sends a normal SMS. Group texts are never split into separate texts.")
     SettingRow("Reactions", "Only sent over RCS. If a chat is on SMS, your reaction waits on your phone (🕓) and sends once RCS is back. Never sent as a \"Liked…\" text.")
     SettingRow("What can break", "Google/Samsung Messages updates can break the RCS sender, and Life360 changes can break live location. The rest of the app keeps working, and a banner tells you.")
     SettingRow("Not in this version", "Call recording (Android blocks other apps from recording the other person), visual voicemail, and the unified Instagram/Snapchat inbox (planned).")
-    SettingRow("Two modes", "Google Messages mode keeps RCS. Contact Hub mode makes Contact Hub your texting app (SMS/MMS only). Switch in Settings → Messaging.")
+    SettingRow("Two modes", "Google Messages mode keeps RCS. Orbit mode makes Orbit your texting app (SMS/MMS only). Switch in Settings → Messaging.")
 }

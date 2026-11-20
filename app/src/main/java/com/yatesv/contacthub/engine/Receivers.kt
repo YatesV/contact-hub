@@ -47,7 +47,7 @@ class ActionReceiver : BroadcastReceiver() {
         const val DECLINE = "com.yatesv.contacthub.DECLINE"
         const val AUTO_REPLY = "com.yatesv.contacthub.AUTO_REPLY"
 
-        /** Marks read in Contact Hub and taps "Mark as read" in the Messages app too, so both stay in sync. */
+        /** Marks read in Orbit and taps "Mark as read" in the Messages app too, so both stay in sync. */
         suspend fun markRead(key: String) {
             val dao = Hub.db.dao()
             val m = dao.meta(key) ?: ConvMeta(key)
@@ -65,6 +65,8 @@ class BootReceiver : BroadcastReceiver() {
             HubApp.scheduleWork(ctx)
             ScheduleWorker.enqueue(ctx, 0)
             MockStore.onBoot(ctx)
+            Arrivals.sync(ctx)
+            DailyWorker.schedule(ctx)
         }
     }
 }

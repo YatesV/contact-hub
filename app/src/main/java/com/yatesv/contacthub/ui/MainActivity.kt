@@ -109,7 +109,7 @@ class MainActivity : FragmentActivity() {
                             Nav.locked = false
                             if (Nav.openHiddenAfterUnlock) { Nav.openHiddenAfterUnlock = false; Nav.hiddenUnlocked = true; Nav.go(Screen.Hidden) }
                         }
-                        else -> AppRoot()
+                        else -> { AppRoot(); PanicShake(this@MainActivity) }
                     }
                 }
             }
@@ -140,12 +140,26 @@ class MainActivity : FragmentActivity() {
 
     private fun handle(intent: Intent?) {
         intent ?: return
+        if (intent.getStringExtra("open") == "laptop") {
+            intent.removeExtra("open")
+            Nav.stack.retainAll { it == Screen.Tabs }
+            Nav.go(Screen.SettingsPage("laptop"))
+            return
+        }
         if (intent.getStringExtra("open") == "mock") {
             intent.removeExtra("open")
             Nav.stack.retainAll { it == Screen.Tabs }
             Nav.go(Screen.MockLocation)
             return
         }
+        intent.getStringExtra("callnote")?.let { number ->
+            intent.removeExtra("callnote")
+            com.yatesv.contacthub.engine.CallNotes.pendingFor = number
+            Nav.stack.retainAll { it == Screen.Tabs }
+            Nav.go(Screen.Contact(number))
+            return
+        }
+        intent.getStringExtra("draft")?.let { d -> intent.getStringExtra("conv")?.let { Nav.drafts[it] = d }; intent.removeExtra("draft") }
         intent.getStringExtra("conv")?.let { key ->
             // Hidden chats still need your fingerprint/PIN, even when opened from a notification or another app
             Hub.scope.launch {

@@ -133,6 +133,9 @@ class Life360(ctx: Context) {
                 .putLong("synced", System.currentTimeMillis()).putString("status", "").apply()
             _members.value = list
             _status.value = ""
+            // Remember where everyone was, for the day's trail on their contact page
+            list.forEach { m -> if (m.lat != null && m.lng != null && m.updated > 0)
+                runCatching { com.yatesv.contacthub.Hub.orbit.addTrail(m.id, com.yatesv.contacthub.data.TrailPoint(m.updated, m.lat, m.lng)) } }
             list
         }.onFailure { e ->
             val msg = (e as? L360Error)?.message ?: "Couldn't reach Life360"

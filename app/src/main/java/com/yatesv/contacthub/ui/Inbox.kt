@@ -95,6 +95,7 @@ data class ConvRow(
     val meta: ConvMeta,
     val category: Category,
     val isGroup: Boolean,
+    val lastIncoming: Long = 0,
 )
 
 object InboxData {
@@ -145,6 +146,7 @@ object InboxData {
                 meta = meta,
                 category = Categorize.of(key, snip, isContact, addresses.size == 1 && Phone.norm(addresses[0]) in blocked),
                 isGroup = isGroup,
+                lastIncoming = lastIncoming,
             )
         }
 
@@ -185,6 +187,11 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
     var menu by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<ConvRow?>(null) }
     var folderFor by remember { mutableStateOf<ConvRow?>(null) }
+    var snoozeFor by remember { mutableStateOf<ConvRow?>(null) }
+    var showSnoozed by remember { mutableStateOf(false) }
+    val orbitV by Hub.orbit.version.collectAsState()
+    val snoozes = remember(version, orbitV) { Hub.orbit.snoozes() }
+    fun snoozed(r: ConvRow) = snoozes[r.key]?.let { (until, at) -> com.yatesv.contacthub.data.Snooze.hidden(until, at, r.lastIncoming) } == true
     val view = androidx.compose.ui.platform.LocalView.current
 
     LaunchedEffect(version, settings.olderThan6Months) {
@@ -196,7 +203,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         when (mode) {
             InboxMode.HIDDEN -> r.meta.hidden
             InboxMode.ARCHIVED -> r.meta.archived && !r.meta.hidden
-            InboxMode.NORMAL -> !r.meta.hidden && !r.meta.archived
+            InboxMode.NORMAL -> !r.meta.hidden && !r.meta.archived && (showSnoozed || !snoozed(r))
         }
     }.filter { r ->
         when {
@@ -262,6 +269,12 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                             folders.forEach { f -> Pill(f.name, filter == "f:${f.id}") { filter = "f:${f.id}" } }
                         }
                     }
+                    val snoozedCount = if (mode == InboxMode.NORMAL) rows.orEmpty().count { !it.meta.hidden && !it.meta.archived && snoozed(it) } else 0
+                    if (snoozedCount > 0 || showSnoozed) item(key = "snoozed") {
+                        TextButton({ showSnoozed = !showSnoozed }, Modifier.padding(horizontal = 8.dp)) {
+                            Text(if (showSnoozed) "Hide snoozed chats" else "💤 $snoozedCount snoozed · show")
+                        }
+                    }
                     if (pinned.isNotEmpty()) item(key = "pinned") {
                         PinnedGrid(pinned, onOpen = { Nav.go(Screen.Chat(it.key)) }, onLong = { Haptics.long(view); actionsFor = it })
                     }
@@ -284,6 +297,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         }
     }
 
+    snoozeFor?.let { r -> SnoozeDialog(r.key) { snoozeFor = null } }
     actionsFor?.let { r ->
         AlertDialog(
             onDismissRequest = { actionsFor = null },
@@ -298,11 +312,12 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                     act(if (r.meta.muted) "Unmute" else "Mute") { InboxData.updateMeta(r.key) { it.copy(muted = !it.muted) } }()
                     act(if (r.meta.hidden) "Unhide" else "Hide (move to hidden chats)") { InboxData.updateMeta(r.key) { it.copy(hidden = !it.hidden) } }()
                     act("Mark as read") { ActionReceiver.markRead(r.key) }()
+                    TextButton({ snoozeFor = r; actionsFor = null }, Modifier.fillMaxWidth()) { Text(if (snoozes.containsKey(r.key)) "Snoozed · change…" else "Snooze…", Modifier.fillMaxWidth()) }
                     TextButton({ folderFor = r; actionsFor = null }, Modifier.fillMaxWidth()) { Text("Move to folder…", Modifier.fillMaxWidth()) }
                     if (!r.isGroup && r.addresses.isNotEmpty()) {
                         val blocked = r.category == Category.SPAM && Hub.contacts.isBlocked(r.addresses[0])
                         act(if (blocked) "Unblock" else "Block") {
-                            if (!Hub.contacts.setBlocked(r.addresses[0], !blocked)) Hub.banner.value = "Make Contact Hub your default phone app to block numbers."
+                            if (!Hub.contacts.setBlocked(r.addresses[0], !blocked)) Hub.banner.value = "Make Orbit your default phone app to block numbers."
                             Hub.changed()
                         }()
                     }
@@ -580,9 +595,10 @@ fun ScheduledScreen() {
         if (list.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Schedule, "Nothing scheduled", "In a chat, tap the clock next to Send.") }
         LazyColumn(Modifier.padding(pad)) {
             items(list) { s ->
-                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null), "${fullTime(s.sendAt)}\n${s.body}",
+                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null),
+                    "${fullTime(s.sendAt)}" + Hub.orbit.repeatOf(s.id).let { r -> if (r.isBlank()) "" else " · ${com.yatesv.contacthub.data.Recurring.label(r).lowercase()}" } + "\n${s.body}",
                     onClick = { Nav.go(Screen.Chat(s.convKey)) }) {
-                    TextButton({ scope.launch { Hub.db.dao().deleteScheduled(s.id) } }) { Text("Cancel") }
+                    TextButton({ scope.launch { Hub.db.dao().deleteScheduled(s.id); Hub.orbit.setRepeat(s.id, "") } }) { Text("Cancel") }
                 }
             }
         }

@@ -387,7 +387,7 @@ fun ModeSwitch() {
     @Suppress("UNUSED_EXPRESSION") tick
     val hub = HubSms.isDefault(ctx)
     SectionTitle("Texting mode")
-    ChoiceRow("Who handles your texts", listOf("google" to "Google Messages mode (RCS)", "hub" to "Contact Hub mode (SMS/MMS)"), if (hub) "hub" else "google") { v ->
+    ChoiceRow("Who handles your texts", listOf("google" to "Google Messages mode (RCS)", "hub" to "Orbit mode (SMS/MMS)"), if (hub) "hub" else "google") { v ->
         if (v == "hub" && !hub) {
             val rm = ctx.getSystemService(RoleManager::class.java)
             if (rm.isRoleAvailable(RoleManager.ROLE_SMS)) role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
@@ -396,8 +396,8 @@ fun ModeSwitch() {
             runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
     }
-    Text(if (hub) "Contact Hub sends and receives everything itself. No RCS (typing dots, read receipts, RCS reactions). To go back, pick Google Messages as your SMS app on the next screen."
-        else "Google Messages stays your texting app and handles RCS in the background. Contact Hub sends through it so nothing looks different to anyone.",
+    Text(if (hub) "Orbit sends and receives everything itself. No RCS (typing dots, read receipts, RCS reactions). To go back, pick Google Messages as your SMS app on the next screen."
+        else "Google Messages stays your texting app and handles RCS in the background. Orbit sends through it so nothing looks different to anyone.",
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
@@ -495,13 +495,13 @@ fun DeveloperPage() {
     }
 
     SectionTitle("Try things by hand")
-    SettingRow("Test RCS sender", "Sends \"Contact Hub test\" to YOUR OWN number through Google Messages") { TextButton({ selfTest = true }) { Text("Run") } }
+    SettingRow("Test RCS sender", "Sends \"Orbit test\" to YOUR OWN number through Google Messages") { TextButton({ selfTest = true }) { Text("Run") } }
     SettingRow("Test hiding methods", "Sends 3 texts to YOUR OWN number, one per method (pop-up, live mirror, snapshot), and picks the best for Auto") {
         TextButton({ hideTest = true }) { Text("Run") }
     }
     SettingRow("Test notification", "Shows a sample message notification") {
         TextButton({ scope.launch {
-            Notifier.showMessage(ctx, "selftest", "Contact Hub", false, listOf("Contact Hub" to "This is a test notification"))
+            Notifier.showMessage(ctx, "selftest", "Orbit", false, listOf("Orbit" to "This is a test notification"))
             extra += "Notification: shown"; rebuild()
         } }) { Text("Run") }
     }
@@ -523,7 +523,7 @@ fun DeveloperPage() {
             val results = mutableListOf<String>()
             var popupOk = false
             for (m in listOf("popup", "mirror", "snapshot")) {
-                val r = Sender.send(ctx2, key, "Contact Hub hide test ($m)", listOf(number), forcedHide = m, skipReplyButton = true)
+                val r = Sender.send(ctx2, key, "Orbit hide test ($m)", listOf(number), forcedHide = m, skipReplyButton = true)
                 val how = com.yatesv.contacthub.engine.MessagesAccessibility.lastHideResult()
                 if (m == "popup" && r.ok && how.contains("small window OK")) popupOk = true
                 results += "Hide test [$m]: sent=${r.ok} ${r.route} · $how ${r.error}"
@@ -540,7 +540,7 @@ fun DeveloperPage() {
 @Composable
 private fun SelfSendDialog(
     title: String = "Test the RCS sender",
-    note: String = "This sends one real text, \"Contact Hub test\", to the number below. Use your own number.",
+    note: String = "This sends one real text, \"Orbit test\", to the number below. Use your own number.",
     run: (suspend (Context, String) -> String)? = null,
     onDone: (String?) -> Unit,
 ) {
@@ -564,7 +564,7 @@ private fun SelfSendDialog(
                 Hub.scope.launch {
                     val line = if (run != null) run(ctx, number) else {
                         val key = com.yatesv.contacthub.data.Phone.convKey(listOf(number))
-                        val r = Sender.send(ctx, key, "Contact Hub test", listOf(number), skipReplyButton = true)
+                        val r = Sender.send(ctx, key, "Orbit test", listOf(number), skipReplyButton = true)
                         "RCS sender test: ok=${r.ok} route=${r.route} hide=${com.yatesv.contacthub.engine.MessagesAccessibility.lastHideResult()} ${r.error}"
                     }
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(line) }
@@ -589,13 +589,13 @@ fun PrivacyDataPage() {
     val ctx = LocalContext.current
     var confirm by remember { mutableStateOf(false) }
     HubCard {
-        Text("What Contact Hub reads", style = MaterialTheme.typography.titleMedium)
+        Text("What Orbit reads", style = MaterialTheme.typography.titleMedium)
         Text("Your texts, contacts, call log and Google/Samsung Messages notifications, so it can show and send your messages. It only reads; in Google Messages mode it never changes your texts.",
             style = MaterialTheme.typography.bodyMedium)
     }
     HubCard {
         Text("What stays on your phone", style = MaterialTheme.typography.titleMedium)
-        Text("Everything Contact Hub saves: socials, notes, birthdays, settings, folders, reactions, the activity log and backups. There are no Contact Hub servers, accounts, ads, analytics or trackers.",
+        Text("Everything Orbit saves: socials, notes, birthdays, settings, folders, reactions, the activity log and backups. There are no Orbit servers, accounts, ads, analytics or trackers.",
             style = MaterialTheme.typography.bodyMedium)
     }
     HubCard {
@@ -609,16 +609,16 @@ fun PrivacyDataPage() {
     }
     HubCard {
         Text("Good to know", style = MaterialTheme.typography.titleMedium)
-        Text("Life360 doesn't offer an official way for other apps to connect. Contact Hub uses an unofficial one, which may go against Life360's terms. Life360 could block it. You can sign out anytime in Settings → Life360.",
+        Text("Life360 doesn't offer an official way for other apps to connect. Orbit uses an unofficial one, which may go against Life360's terms. Life360 could block it. You can sign out anytime in Settings → Life360.",
             style = MaterialTheme.typography.bodyMedium)
     }
     SectionTitle("Delete")
-    SettingRow("Delete all Contact Hub data", "Removes socials, notes, settings, logs, Life360 sign-in and backups. Your texts, contacts and calls stay.",
+    SettingRow("Delete all Orbit data", "Removes socials, notes, settings, logs, Life360 sign-in and backups. Your texts, contacts and calls stay.",
         onClick = { confirm = true })
     if (confirm) AlertDialog(
         onDismissRequest = { confirm = false },
-        title = { Text("Delete all Contact Hub data?") },
-        text = { Text("This can't be undone. Contact Hub will close and start fresh. Your texts, contacts and call history are not touched.") },
+        title = { Text("Delete all Orbit data?") },
+        text = { Text("This can't be undone. Orbit will close and start fresh. Your texts, contacts and call history are not touched.") },
         confirmButton = { TextButton({ wipeAll(ctx) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } },
     )
@@ -643,7 +643,7 @@ fun LicensesPage() {
         "osmdroid (maps)" to "Apache License 2.0 · osmdroid contributors",
         "Map data" to "© OpenStreetMap contributors, available under the Open Database License (ODbL)",
         "Material Icons" to "Apache License 2.0 · Google",
-        "Social app icons" to "Shown from the apps installed on your phone; they belong to their owners. Not copied into Contact Hub.",
+        "Social app icons" to "Shown from the apps installed on your phone; they belong to their owners. Not copied into Orbit.",
     )
     libs.forEach { (n, l) -> SettingRow(n, l) }
     Text("Full license texts: apache.org/licenses/LICENSE-2.0 and opendatacommons.org/licenses/odbl",

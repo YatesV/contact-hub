@@ -56,11 +56,11 @@ object Diagnostics {
         fun info(d: String) = Status.INFO to d
 
         // ---- Device & app
-        check("App", "Version") { info("Contact Hub ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})") }
+        check("App", "Version") { info("Orbit ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})") }
         check("App", "Device") { info("${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), One UI ${runCatching { Build.VERSION::class.java.getField("SEM_PLATFORM_INT").getInt(null) }.getOrNull() ?: "?"}") }
         check("App", "Texting mode") {
             val def = Telephony.Sms.getDefaultSmsPackage(ctx).orEmpty()
-            info(if (def == ctx.packageName) "Contact Hub mode (Contact Hub is the default texting app, SMS/MMS, no RCS)" else "Google Messages mode (default texting app: $def)")
+            info(if (def == ctx.packageName) "Orbit mode (Orbit is the default texting app, SMS/MMS, no RCS)" else "Google Messages mode (default texting app: $def)")
         }
         check("App", "Network") {
             val cm = ctx.getSystemService(ConnectivityManager::class.java)
@@ -100,7 +100,7 @@ object Diagnostics {
             val rm = ctx.getSystemService(RoleManager::class.java)
             when {
                 !rm.isRoleAvailable(RoleManager.ROLE_DIALER) -> warn("Phone role not available on this device")
-                rm.isRoleHeld(RoleManager.ROLE_DIALER) -> pass("Contact Hub is the default phone app")
+                rm.isRoleHeld(RoleManager.ROLE_DIALER) -> pass("Orbit is the default phone app")
                 else -> warn("Not default: no custom call screen or blocking")
             }
         }
@@ -183,7 +183,7 @@ object Diagnostics {
         MockStore.load()
         check("Mock location", "Developer options") { if (MockSetup.devOptionsOn(ctx)) pass("On") else warn("Off: About phone → Software information → tap Build number 7 times") }
         check("Mock location", "Selected mock app") {
-            if (MockSetup.isMockApp(ctx)) pass("Contact Hub is the mock location app") else warn("Not selected: Developer options → Select mock location app → Contact Hub")
+            if (MockSetup.isMockApp(ctx)) pass("Orbit is the mock location app") else warn("Not selected: Developer options → Select mock location app → Orbit")
         }
         check("Mock location", "Take over a test provider") {
             if (!MockSetup.isMockApp(ctx)) info("Skipped (not the mock app yet)")
@@ -233,6 +233,52 @@ object Diagnostics {
             if (r != "failed") pass("$r in $ms ms") else warn("Open-Meteo didn't answer: altitude won't be set")
         }
 
+        // ---- Orbit extras
+        check("Orbit", "App icon") { info(runCatching { com.yatesv.contacthub.ui.AppIcons.current(ctx) }.getOrDefault("?")) }
+        check("Orbit", "Smart replies (on-device)") {
+            if (!Hub.settings.value.smartReplies) info("Off")
+            else {
+                val (r, ms) = timed { Ai.onDeviceReplies(listOf(com.yatesv.contacthub.data.Msg("t", "Are you coming to dinner tonight?", System.currentTimeMillis(), false, sender = "a"))).joinToString(" | ") }
+                if (r.isNotBlank()) pass("\"$r\" in $ms ms") else warn("No suggestions (Smart Reply only works in English)")
+            }
+        }
+        check("Orbit", "AI key") {
+            val st = Hub.settings.value
+            if (!Ai.hasKey) info("None (replies and summaries stay on the phone)") else info("${st.aiProvider} · model ${st.aiModel.ifBlank { "auto" }}")
+        }
+        check("Orbit", "Translation") {
+            val (r, ms) = timed { Ai.translate("Hola, ¿cómo estás?").fold({ "${it.first} (from ${it.second})" }, { "ERROR ${it.message}" }) }
+            if (r.startsWith("ERROR")) warn("$r (needs internet the first time to download the language)") else pass("$r in $ms ms")
+        }
+        check("Orbit", "Birthday + check-in reminders") {
+            val wm = WorkManager.getInstance(ctx).getWorkInfosForUniqueWork("daily").get()
+            val nudges = Hub.orbit.nudges().size
+            if (wm.any { !it.state.isFinished }) pass("Scheduled daily at 9 AM · ${if (Hub.settings.value.birthdayReminders) "birthdays on" else "birthdays off"} · $nudges check-ins")
+            else warn("Daily reminder job isn't scheduled (reopen Orbit)")
+        }
+        check("Orbit", "Snoozed chats") { info("${Hub.orbit.snoozes().size}") }
+        check("Orbit", "Contact groups") { info(Hub.orbit.groups().joinToString { "${it.name} (${it.members.size})" }.ifBlank { "None" }) }
+        check("Orbit", "Arrival texts") {
+            val n = Hub.orbit.arrivals().count { it.on }
+            when {
+                n == 0 -> info("None set up")
+                !Arrivals.canWatch(ctx) -> fail("$n set up, but location isn't allowed")
+                !Arrivals.canWatchInBackground(ctx) -> warn("$n set up; only works while Orbit is open (allow location all the time)")
+                else -> pass("$n watching")
+            }
+        }
+        check("Orbit", "Spam numbers reported") { info("${Hub.orbit.spamList().size}") }
+        check("Orbit", "Person widgets") {
+            val ids = android.appwidget.AppWidgetManager.getInstance(ctx).getAppWidgetIds(android.content.ComponentName(ctx, com.yatesv.contacthub.ui.PersonWidget::class.java))
+            info("${ids.size} on the home screen" + if (ids.any { Hub.orbit.widgetNumber(it) == null }) " (some not set up)" else "")
+        }
+        check("Orbit", "Laptop access") { WebLink.state.value.let { info(if (it.on) "On at ${it.url.ifBlank { "(no Wi-Fi)" }}" else "Off") } }
+        check("Orbit", "Voice-to-text") {
+            if (Build.VERSION.SDK_INT < 33) warn("Needs Android 13+")
+            else if (android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) pass("On-device speech recognition available")
+            else warn("On-device speech recognition not available")
+        }
+
         // ---- Database
         check("Database", "Read/write") {
             val dao = Hub.db.dao()
@@ -247,7 +293,7 @@ object Diagnostics {
         }
 
         // ---- Notifications
-        check("Notifications", "Allowed") { if (NotificationManagerCompat.from(ctx).areNotificationsEnabled()) pass("Yes") else fail("Notifications are off for Contact Hub") }
+        check("Notifications", "Allowed") { if (NotificationManagerCompat.from(ctx).areNotificationsEnabled()) pass("Yes") else fail("Notifications are off for Orbit") }
         check("Notifications", "Channels") {
             val nm = ctx.getSystemService(NotificationManager::class.java)
             info(nm.notificationChannels.joinToString { "${it.name}(imp ${it.importance}${if (it.canBypassDnd()) ", DND" else ""})" })
@@ -303,7 +349,7 @@ object Diagnostics {
     private fun stamp(t: Long) = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(t))
 
     fun report(checks: List<Check>, extra: List<String> = emptyList()): String = buildString {
-        appendLine("Contact Hub self-test, ${stamp(System.currentTimeMillis())}")
+        appendLine("Orbit self-test, ${stamp(System.currentTimeMillis())}")
         appendLine("PASS ${checks.count { it.status == Status.PASS }} · WARN ${checks.count { it.status == Status.WARN }} · FAIL ${checks.count { it.status == Status.FAIL }}")
         appendLine("Message text is never included in this file.")
         appendLine()

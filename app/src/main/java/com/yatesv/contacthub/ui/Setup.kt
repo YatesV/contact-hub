@@ -191,40 +191,40 @@ fun SetupWizard(first: Boolean) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 when (s) {
                     Step.WELCOME -> Welcome(hubMode) { hubMode = it }
-                    Step.PERMS -> StepPage("Allow access", "So Contact Hub can show your texts, contacts and calls. Tap the button and choose Allow on each one.",
-                        done(s), { PhoneMock(listOf("Allow Contact Hub to send and view SMS?"), dialog = true) }) {
+                    Step.PERMS -> StepPage("Allow access", "So Orbit can show your texts, contacts and calls. Tap the button and choose Allow on each one.",
+                        done(s), { PhoneMock(listOf("Allow Orbit to send and view SMS?"), dialog = true) }) {
                         Button({ perms.launch(setupPerms) }, Modifier.fillMaxWidth()) { Text("Allow") }
                         if (permsBlocked) {
                             Text("Android blocked texts/calls access (\"App was denied access to SMS\"). That's normal for apps installed from a file. Unlock it once:",
                                 Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
                             Text("Tap Unlock → ⋮ (top right) → Allow restricted settings → confirm → come back and tap Allow again.",
                                 Modifier.padding(vertical = 8.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
-                            PhoneMock(listOf("App info", "Contact Hub"), menu = true)
+                            PhoneMock(listOf("App info", "Orbit"), menu = true)
                             OutlinedButton({ openAppInfo(ctx) }, Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Unlock") }
                         }
                     }
                     Step.ACCESS -> StepPage("Turn on the RCS sender",
-                        "This lets Contact Hub tap Send inside Google Messages, so your texts go over RCS. Tap Open, then switch on \"Contact Hub RCS sender\".",
-                        done(s), { PhoneMock(listOf("Installed apps", "Contact Hub RCS sender"), highlight = 1, toggle = true) }) {
+                        "This lets Orbit tap Send inside Google Messages, so your texts go over RCS. Tap Open, then switch on \"Orbit RCS sender\".",
+                        done(s), { PhoneMock(listOf("Installed apps", "Orbit RCS sender"), highlight = 1, toggle = true) }) {
                         Button({ openAccessibility(ctx) }, Modifier.fillMaxWidth()) { Text("Open") }
                         RestrictedHelp(ctx)
                     }
                     Step.LISTENER -> StepPage("Turn on notification access",
-                        "Lets Contact Hub see RCS messages and reply through Google Messages. Tap Open and switch on Contact Hub.",
-                        done(s), { PhoneMock(listOf("Notification read, reply and control", "Contact Hub"), highlight = 1, toggle = true) }) {
+                        "Lets Orbit see RCS messages and reply through Google Messages. Tap Open and switch on Orbit.",
+                        done(s), { PhoneMock(listOf("Notification read, reply and control", "Orbit"), highlight = 1, toggle = true) }) {
                         Button({ openListener(ctx) }, Modifier.fillMaxWidth()) { Text("Open") }
                         RestrictedHelp(ctx)
                     }
-                    Step.DEFAULT_SMS -> StepPage("Make Contact Hub your texting app",
-                        "In Contact Hub mode it sends and receives all texts and picture messages itself. There's no RCS in this mode.",
-                        done(s), { PhoneMock(listOf("Set Contact Hub as your default SMS app?", "Google Messages", "Contact Hub"), highlight = 2, dialog = true) }) {
+                    Step.DEFAULT_SMS -> StepPage("Make Orbit your texting app",
+                        "In Orbit mode it sends and receives all texts and picture messages itself. There's no RCS in this mode.",
+                        done(s), { PhoneMock(listOf("Set Orbit as your default SMS app?", "Google Messages", "Orbit"), highlight = 2, dialog = true) }) {
                         Button({
                             if (rm.isRoleAvailable(RoleManager.ROLE_SMS)) role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
                         }, Modifier.fillMaxWidth()) { Text("Set as default") }
                     }
                     Step.PHONE -> StepPage("Default phone app (optional)",
-                        "Gives you Contact Hub's call screen and lets you block numbers. You can skip this.",
-                        done(s), { PhoneMock(listOf("Set Contact Hub as your default phone app?", "Phone", "Contact Hub"), highlight = 2, dialog = true) }) {
+                        "Gives you Orbit's call screen and lets you block numbers. You can skip this.",
+                        done(s), { PhoneMock(listOf("Set Orbit as your default phone app?", "Phone", "Orbit"), highlight = 2, dialog = true) }) {
                         if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) Button({ role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER)) }, Modifier.fillMaxWidth()) { Text("Set as default") }
                         TextButton({ next() }) { Text("Skip") }
                     }
@@ -236,7 +236,7 @@ fun SetupWizard(first: Boolean) {
         Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             if (index > 0) OutlinedButton({ prev() }) { Text("Back") } else Spacer(Modifier.width(1.dp))
             when (step) {
-                Step.DONE -> Button({ finish() }) { Text("Start using Contact Hub") }
+                Step.DONE -> Button({ finish() }) { Text("Start using Orbit") }
                 Step.WELCOME, Step.ACCOUNTS -> Button({ next() }) { Text("Next") }
                 else -> Button({ next() }) { Text(if (done(step)) "Next" else "Do this later") }
             }
@@ -249,14 +249,14 @@ fun SetupWizard(first: Boolean) {
 private fun Welcome(hubMode: Boolean, onMode: (Boolean) -> Unit) {
     Spacer(Modifier.height(16.dp))
     Text("👋", fontSize = 56.sp)
-    Text("Welcome to Contact Hub", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+    Text("Welcome to Orbit", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
     Text("Texts, contacts, calls, socials and Life360 in one place. First, pick how texting works:",
         Modifier.padding(vertical = 12.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
     ModeCard("Google Messages mode", "Recommended",
         "Keeps RCS: typing dots, read receipts, HD photos, reactions. Google Messages stays installed and does the sending in the background.",
         !hubMode) { onMode(false) }
-    ModeCard("Contact Hub mode", null,
-        "Contact Hub is your texting app and does everything itself. Most reliable, but plain SMS/MMS only (no RCS).",
+    ModeCard("Orbit mode", null,
+        "Orbit is your texting app and does everything itself. Most reliable, but plain SMS/MMS only (no RCS).",
         hubMode) { onMode(true) }
     Text("You can switch anytime in Settings → Messaging.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -305,11 +305,11 @@ private fun RestrictedHelp(ctx: Context) {
     if (open) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp)) {
         Text("That's normal for apps installed from a file. To unlock it:", fontWeight = FontWeight.SemiBold)
         Text("1. Tap the switch once so Android shows \"Restricted setting\", then tap OK. (Already did this for text permissions? Skip to 4.)\n" +
-            "2. Tap Unlock below. It opens Contact Hub's App info.\n" +
+            "2. Tap Unlock below. It opens Orbit's App info.\n" +
             "3. Tap ⋮ in the top right → Allow restricted settings → confirm with your fingerprint/PIN.\n" +
             "4. Come back here and tap Open again. The switch works now.",
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 8.dp))
-        PhoneMock(listOf("App info", "Contact Hub"), menu = true)
+        PhoneMock(listOf("App info", "Orbit"), menu = true)
         Spacer(Modifier.height(8.dp))
         OutlinedButton({ openAppInfo(ctx) }, Modifier.fillMaxWidth()) { Text("Unlock") }
     }
@@ -345,7 +345,7 @@ private fun AccountsStep(openLife360: () -> Unit, openFriends: (com.yatesv.conta
     }
 }
 
-/** Saves the Drive file Contact Hub may keep writing its daily backup to. */
+/** Saves the Drive file Orbit may keep writing its daily backup to. */
 fun connectDrive(ctx: Context, uri: Uri) {
     runCatching {
         ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)

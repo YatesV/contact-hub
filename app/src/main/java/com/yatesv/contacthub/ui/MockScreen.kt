@@ -259,8 +259,24 @@ fun MockScreen() {
                         if (!MockApi.hasMapbox && s.mockMapStyle == "streets") { message = "Satellite needs a free Mapbox token (⚙️)."; showSettings = true }
                         else Hub.settings.update { it.copy(mockMapStyle = if (it.mockMapStyle == "satellite") "streets" else "satellite") }
                     }, containerColor = MaterialTheme.colorScheme.surface) { Icon(Icons.Default.Layers, "Street / satellite") }
-                    SmallFloatingActionButton({ MapCenter.go((st.here.takeIf { st.active } ?: realOrLast)) }, containerColor = MaterialTheme.colorScheme.surface) {
-                        Icon(Icons.Default.MyLocation, "Center")
+                    SmallFloatingActionButton({
+                        when {
+                            !hasLoc -> { message = "Allow location so the map can find you."; perms.launch(locationPerms()) }
+                            st.active -> {
+                                // Android only gives out the fake location while mocking, so use the last real one
+                                if (realOrLast != null) { MapCenter.go(realOrLast); message = "Showing your last real location from before mocking started." }
+                                else message = "Your real location isn't known yet. Stop mocking, then tap this again."
+                            }
+                            else -> {
+                                realOrLast?.let { MapCenter.go(it) } ?: run { message = "Finding your location…" }
+                                freshFix(ctx) { p -> real = p; MockStore.saveReal(p); MapCenter.go(p); if (message == "Finding your location…") message = "" }
+                            }
+                        }
+                    }, containerColor = MaterialTheme.colorScheme.surface) {
+                        Icon(Icons.Default.MyLocation, "Go to my real location")
+                    }
+                    if (st.active) SmallFloatingActionButton({ MapCenter.go(st.here) }, containerColor = MaterialTheme.colorScheme.surface) {
+                        Icon(Icons.Default.Place, "Go to mock location", tint = Color(0xFFFF453A))
                     }
                 }
                 Text(MockApi.attribution(s.mockMapStyle), style = MaterialTheme.typography.labelSmall, color = Color.Black,
@@ -719,12 +735,31 @@ private fun RealLocation(enabled: Boolean, onFix: (LatLng) -> Unit) {
     DisposableEffect(enabled) {
         if (!enabled) return@DisposableEffect onDispose { }
         val lm = ctx.getSystemService(LocationManager::class.java)
-        fun ok(l: Location) = if (Build.VERSION.SDK_INT >= 31) !l.isMock else @Suppress("DEPRECATION") !l.isFromMockProvider
+        fun ok(l: Location) = isReal(l)
         val listener = LocationListener { l -> if (ok(l)) onFix(LatLng(l.latitude, l.longitude)) }
-        val provs = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+        val provs = realProviders(lm)
         provs.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.filter(::ok).maxByOrNull { it.time }?.let { onFix(LatLng(it.latitude, it.longitude)) }
         provs.forEach { runCatching { lm.requestLocationUpdates(it, 3000L, 2f, listener, Looper.getMainLooper()) } }
         onDispose { runCatching { lm.removeUpdates(listener) } }
+    }
+}
+
+private fun isReal(l: Location) = if (Build.VERSION.SDK_INT >= 31) !l.isMock else @Suppress("DEPRECATION") !l.isFromMockProvider
+
+private fun realProviders(lm: LocationManager) = buildList {
+    if (Build.VERSION.SDK_INT >= 31) add(LocationManager.FUSED_PROVIDER)
+    add(LocationManager.GPS_PROVIDER); add(LocationManager.NETWORK_PROVIDER)
+}.filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+
+/** Asks Android for one fresh real fix (fastest provider wins). */
+@SuppressLint("MissingPermission")
+private fun freshFix(ctx: Context, onFix: (LatLng) -> Unit) {
+    val lm = ctx.getSystemService(LocationManager::class.java)
+    var got = false
+    val cb = { l: Location? -> if (l != null && isReal(l) && !got) { got = true; onFix(LatLng(l.latitude, l.longitude)) } }
+    for (p in realProviders(lm)) runCatching {
+        if (Build.VERSION.SDK_INT >= 30) lm.getCurrentLocation(p, null, ctx.mainExecutor) { cb(it) }
+        else @Suppress("DEPRECATION") lm.requestSingleUpdate(p, { l: Location -> cb(l) }, Looper.getMainLooper())
     }
 }
 
@@ -733,7 +768,12 @@ private fun RealLocation(enabled: Boolean, onFix: (LatLng) -> Unit) {
 /** Lets buttons outside the map move it. */
 private object MapCenter {
     var map: MapView? = null
-    fun go(p: LatLng?) { p ?: return; map?.controller?.animateTo(GeoPoint(p.lat, p.lng), 16.0, 600L) }
+    fun go(p: LatLng?) {
+        val m = map ?: return
+        p ?: return
+        val zoom = m.zoomLevelDouble.coerceAtLeast(16.0)
+        m.post { m.controller.animateTo(GeoPoint(p.lat, p.lng), zoom, 600L) }
+    }
 }
 
 private fun dot(color: Int, sizeDp: Int, ctx: Context) = GradientDrawable().apply {
@@ -757,7 +797,14 @@ private fun MockMap(
     pressCb[0] = onLongPress
     val ours = remember { mutableListOf<Overlay>() }
     var centered by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) { onDispose { MapCenter.map?.onDetach(); MapCenter.map = null } }
+    val mine = remember { arrayOfNulls<MapView>(1) }
+    DisposableEffect(Unit) {
+        onDispose {
+            mine[0]?.onDetach()
+            // Only forget the map if it's still this one (a new screen may have made its own already)
+            if (MapCenter.map === mine[0]) MapCenter.map = null
+        }
+    }
     AndroidView(
         factory = { ctx ->
             MapView(ctx).apply {
@@ -770,6 +817,7 @@ private fun MockMap(
                     override fun longPressHelper(p: GeoPoint?): Boolean { p?.let { pressCb[0](LatLng(it.latitude, it.longitude)) }; return true }
                 }))
                 MapCenter.map = this
+                mine[0] = this
             }
         },
         update = { map ->

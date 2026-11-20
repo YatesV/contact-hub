@@ -70,6 +70,9 @@ object Sender {
      */
     suspend fun send(ctx: Context, convKey: String, text: String, addresses: List<String> = addressesOf(convKey), allowDriving: Boolean = true,
                      forcedHide: String? = null, skipReplyButton: Boolean = false): SendResult {
+        // Never drive Google Messages behind the lock screen: it can't find Send there, and the chat cover could show on the lock screen
+        @Suppress("NAME_SHADOWING")
+        val allowDriving = allowDriving && !ctx.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
         val body = text.trim()
         if (body.isEmpty()) return SendResult(false, Route.NONE, "Empty message")
         val s = Hub.settings.value
@@ -102,6 +105,12 @@ object Sender {
                     Hub.changed()
                     return SendResult(true, Route.MESSAGES_REPLY)
                 } else Hub.replies.remove(convKey)
+            }
+
+            // A group we only know part of: typing into a new chat or falling back to SMS would text the wrong people
+            if (isPartialGroup(ctx, convKey)) {
+                HubLog.d("Send", "partial group without a reply button: not sending")
+                return SendResult(false, Route.NONE, "Open this group in Google Messages once (or wait for a new message in it), then send again, so it goes to everyone in the group.")
             }
 
             // 2. Drive the Messages app

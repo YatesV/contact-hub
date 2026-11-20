@@ -371,10 +371,12 @@ fun AudioAttachment(uri: Uri, fg: Color) {
         Ai.transcribe(ctx, uri).onSuccess { t -> text = t; Transcripts.map[uri.toString()] = t }.onFailure { text = "⚠️ ${it.message}" }
         busy = false
     }
-    // Android's speech recognizer needs the microphone permission even for a recording; Orbit never uses the mic
-    val mic = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+    // Android's speech recognizer needs the microphone permission even for a recording; Orbit never uses the mic.
+    // Asking needs an app screen: the chat copy shown while sending through Google Messages has none (asking there crashed).
+    val canAsk = androidx.activity.compose.LocalActivityResultRegistryOwner.current != null
+    val mic = if (canAsk) androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) transcribe() else text = "⚠️ Allow the microphone permission to turn voice messages into text (Orbit doesn't record anything)"
-    }
+    } else null
     Column(Modifier.widthIn(min = 200.dp, max = 300.dp).padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton({
@@ -388,7 +390,7 @@ fun AudioAttachment(uri: Uri, fg: Color) {
             Text(" Voice message", color = fg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             if (text == null) TextButton({
                 if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) transcribe()
-                else mic.launch(android.Manifest.permission.RECORD_AUDIO)
+                else mic?.launch(android.Manifest.permission.RECORD_AUDIO) ?: run { text = "⚠️ Open the chat in Orbit to turn this into text" }
             }, enabled = !busy) { Text(if (busy) "…" else "Text", color = fg) }
         }
         text?.let { Text(it, color = fg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)) }
@@ -402,7 +404,8 @@ object ReplyCache { val map = java.util.concurrent.ConcurrentHashMap<String, Lis
 fun VideoAttachment(uri: Uri, mime: String) {
     val ctx = LocalContext.current
     Box(Modifier.size(220.dp, 150.dp).background(Color.Black).clickable {
-        ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { Hub.banner.value = "No app on this phone plays this video" }
     }, contentAlignment = Alignment.Center) {
         coil.compose.AsyncImage(uri, null, Modifier.size(220.dp, 150.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
         Box(Modifier.size(48.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
@@ -569,4 +572,35 @@ fun panic(activity: android.app.Activity) {
     Nav.stack.retainAll { it == Screen.Tabs }
     if (Hub.settings.value.appLock) Nav.locked = true
     activity.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+// ---------------- Crash report ----------------
+
+/** After a crash: shows what happened, with a button to share the report. */
+@Composable
+fun CrashReportDialog() {
+    val ctx = LocalContext.current
+    var report by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yatesv.contacthub.engine.CrashLog.unseen(ctx) } }
+    val r = report ?: return
+    AlertDialog(
+        onDismissRequest = { com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null },
+        title = { Text("Orbit closed unexpectedly") },
+        text = {
+            Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                Text("Here's what went wrong. Share it so it can be fixed.", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(8.dp))
+                Text(r.take(3000), style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton({
+                ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, r), "Share crash report")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null
+            }) { Text("Share report") }
+        },
+        dismissButton = { TextButton({ com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null }) { Text("Dismiss") } },
+    )
 }

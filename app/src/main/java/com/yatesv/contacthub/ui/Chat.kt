@@ -222,9 +222,10 @@ fun ChatScreen(key: String) {
     val name = InboxData.nameFor(key, addresses, meta, group?.name)
     val chatType = Hub.rcsState(key)
 
-    DisposableEffect(key) {
+    // "This chat is on screen" only while Orbit is actually in front (Home/screen off clears it, so you still get notified)
+    androidx.lifecycle.compose.LifecycleResumeEffect(key) {
         Hub.openConv = key
-        onDispose { if (Hub.openConv == key) Hub.openConv = "" }
+        onPauseOrDispose { if (Hub.openConv == key) Hub.openConv = "" }
     }
     LaunchedEffect(key, version, limit) {
         meta = dao.meta(key) ?: ConvMeta(key)
@@ -681,7 +682,10 @@ internal fun Bubble(
                         a.mime.startsWith("audio") -> AudioAttachment(a.uri, fg)
                         a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime)
                         a.mime.startsWith("image") -> AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
-                            .clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) },
+                            .clickable {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                    .onFailure { Hub.banner.value = "No app on this phone opens this picture" }
+                            },
                             contentScale = ContentScale.Crop)
                         // Contact cards, PDFs and other files: a tappable row instead of a broken picture
                         else -> Row(Modifier.clickable {

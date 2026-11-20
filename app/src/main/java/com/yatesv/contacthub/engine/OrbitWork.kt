@@ -171,22 +171,33 @@ object Arrivals {
     private fun pi(ctx: Context, id: String, flags: Int = PendingIntent.FLAG_UPDATE_CURRENT) = PendingIntent.getBroadcast(ctx, id.hashCode(),
         Intent(ctx, ArrivalReceiver::class.java).setAction(ACTION).putExtra("id", id), flags or PendingIntent.FLAG_MUTABLE)
 
-    /** Registers every rule with Android. Called on start, after changes and after a restart. */
+    /**
+     * Hands one rule to Android. Android says "entering" right away if you're already inside, so the rule is
+     * stamped as just armed and that first event is ignored (you have to leave and come back).
+     * Only call this when a rule is created/turned on, or after boot/update; Android keeps alerts while the phone is on,
+     * even when Orbit's process is closed.
+     */
     @SuppressLint("MissingPermission")
-    fun sync(ctx: Context) {
+    fun register(ctx: Context, r: ArrivalRule) {
         val lm = ctx.getSystemService(LocationManager::class.java)
-        val rules = Hub.orbit.arrivals()
-        for (r in rules) runCatching { lm.removeProximityAlert(pi(ctx, r.id)) }
-        if (!canWatch(ctx)) return
-        for (r in rules.filter { it.on }) runCatching {
+        runCatching { lm.removeProximityAlert(pi(ctx, r.id)) }
+        if (!r.on || !canWatch(ctx)) return
+        runCatching {
             Hub.orbit.setArmed(r.id)
             lm.addProximityAlert(r.lat, r.lng, r.radiusM.toFloat(), -1, pi(ctx, r.id))
         }.onFailure { HubLog.w("Arrive", "add alert", it) }
     }
 
     @SuppressLint("MissingPermission")
-    fun remove(ctx: Context, id: String) {
+    fun unregister(ctx: Context, id: String) {
         runCatching { ctx.getSystemService(LocationManager::class.java).removeProximityAlert(pi(ctx, id)) }
+    }
+
+    /** After a reboot, an app update, a restore, or location permission just granted. */
+    fun syncAll(ctx: Context) = Hub.orbit.arrivals().forEach { register(ctx, it) }
+
+    fun remove(ctx: Context, id: String) {
+        unregister(ctx, id)
         Hub.orbit.deleteArrival(id)
     }
 }
@@ -205,7 +216,7 @@ class ArrivalReceiver : BroadcastReceiver() {
         // Don't send twice for one visit (GPS can wobble across the edge)
         if (System.currentTimeMillis() - r.lastFired < 2 * 3_600_000L) return
         Hub.orbit.saveArrival(r.copy(lastFired = System.currentTimeMillis(), on = r.everyTime))
-        if (!r.everyTime) Arrivals.sync(ctx)
+        if (!r.everyTime) Arrivals.unregister(ctx, r.id)
         WorkManager.getInstance(ctx).enqueue(OneTimeWorkRequestBuilder<ArrivalWorker>()
             .setInputData(workDataOf("to" to r.to, "text" to r.text, "place" to r.place))
             .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())

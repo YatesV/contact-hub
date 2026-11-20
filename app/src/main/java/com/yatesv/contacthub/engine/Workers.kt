@@ -29,21 +29,30 @@ import java.util.concurrent.TimeUnit
 class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
     override suspend fun doWork(): Result {
         val dao = Hub.db.dao()
-        if (dao.failStuckScheduled(System.currentTimeMillis() - 10 * 60_000) > 0)
-            Notifier.status(applicationContext, 7300, "A scheduled message may not have sent", "Check the Scheduled list and the chat.")
+        // "Stuck" = marked sending, but no worker is sending it (the app was killed mid-send)
+        val stuck = dao.sendingScheduled().filter { it.id !in inFlight && it.sendAt < System.currentTimeMillis() - 10 * 60_000 }
+        stuck.forEach { dao.setScheduled(it.id, "failed") }
+        if (stuck.isNotEmpty()) Notifier.status(applicationContext, 7300, "A scheduled message may not have sent", "Check the Scheduled list and the chat.")
         for (s in dao.dueScheduled(System.currentTimeMillis())) {
             if (dao.claimScheduled(s.id) == 0) continue
-            val r = Sender.send(applicationContext, s.convKey, s.body, s.addresses.split(',').filter { it.isNotBlank() })
+            inFlight += s.id
+            try {
+            // Background: never open Google Messages over whatever you're doing
+            val r = Sender.send(applicationContext, s.convKey, s.body, s.addresses.split(',').filter { it.isNotBlank() }, allowDriving = false)
             dao.setScheduled(s.id, if (r.ok) "sent" else "failed")
             // Repeating texts: schedule the next one (even if this one failed, so a yearly text isn't lost)
             runCatching { RecurringTexts.afterSent(s) }
             if (!r.ok) Notifier.status(applicationContext, s.id.toInt(), "Scheduled message not sent", r.error)
+            } finally { inFlight -= s.id }
         }
         Hub.changed()
         return Result.success()
     }
 
     companion object {
+        /** Scheduled texts being sent right now in this process. */
+        val inFlight: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
         fun enqueue(ctx: Context, delayMs: Long) {
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 "scheduled-${System.currentTimeMillis() + delayMs}", ExistingWorkPolicy.KEEP,
@@ -126,6 +135,7 @@ object Backup {
             } }))
             put("scheduled", arr(dao.allScheduled().filter { it.status == "waiting" }.map { s -> JSONObject().apply {
                 put("convKey", s.convKey); put("addresses", s.addresses); put("body", s.body); put("sendAt", s.sendAt)
+                put("repeat", Hub.orbit.repeatOf(s.id))
             } }))
             put("folders", arr(dao.allFolders().map { f -> JSONObject().apply { put("id", f.id); put("name", f.name); put("sort", f.sort) } }))
             put("extras", arr(dao.allExtras().map { e -> JSONObject().apply {
@@ -142,7 +152,9 @@ object Backup {
         }
     }
 
-    suspend fun writeDaily(ctx: Context): File {
+    suspend fun writeDaily(ctx: Context): File = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { writeDaily0(ctx) }
+
+    private suspend fun writeDaily0(ctx: Context): File {
         val name = "contacthub-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".json"
         val f = File(dir(ctx), name)
         val json = build(ctx).toString()
@@ -157,13 +169,15 @@ object Backup {
         return f
     }
 
-    suspend fun exportTo(ctx: Context, uri: Uri) {
+    suspend fun exportTo(ctx: Context, uri: Uri) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         ctx.contentResolver.openOutputStream(uri)?.use { it.write(build(ctx).toString(2).toByteArray()) }
         Hub.settings.update { it.copy(lastBackup = System.currentTimeMillis()) }
     }
 
     /** Restores Orbit's own data. Texts themselves stay in the phone's SMS database. */
-    suspend fun restore(ctx: Context, uri: Uri): String {
+    suspend fun restore(ctx: Context, uri: Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { restore0(ctx, uri) }
+
+    private suspend fun restore0(ctx: Context, uri: Uri): String {
         val text = ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return "Couldn't open file"
         val j = JSONObject(text)
         if (j.optString("app") != "contact-hub") return "That isn't a Orbit backup"
@@ -171,7 +185,7 @@ object Backup {
         fun JSONObject.objs(k: String) = optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.orEmpty()
         j.optJSONObject("settings")?.let { sj ->
             val keep = Hub.settings.value
-            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, mapboxToken = keep.mapboxToken, aiKey = keep.aiKey, onboarded = true) }
+            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, mapboxToken = keep.mapboxToken, aiKey = keep.aiKey, driveUri = keep.driveUri, onboarded = true) }
         }
         j.objs("meta").forEach { o -> dao.putMeta(ConvMeta(o.getString("key"), o.optBoolean("pinned"), o.optBoolean("archived"),
             o.optBoolean("muted"), o.optBoolean("hidden"), o.optLong("folderId"), o.optString("customName"), o.optString("photoUri"),
@@ -186,13 +200,17 @@ object Backup {
             msgBody = o.optString("msgBody"), emoji = o.getString("emoji"), fromMe = o.optBoolean("fromMe"), pending = o.optBoolean("pending"),
             date = o.optLong("date"))) }
         j.objs("starred").forEach { o -> dao.star(Starred(o.getString("msgKey"), o.optString("convKey"), o.optString("body"), o.optLong("date"))) }
-        j.objs("scheduled").forEach { o -> if (o.optLong("sendAt") > System.currentTimeMillis())
-            dao.schedule(Scheduled(convKey = o.getString("convKey"), addresses = o.optString("addresses"), body = o.optString("body"), sendAt = o.optLong("sendAt"))) }
+        j.objs("scheduled").forEach { o -> if (o.optLong("sendAt") > System.currentTimeMillis()) {
+            val id = dao.schedule(Scheduled(convKey = o.getString("convKey"), addresses = o.optString("addresses"), body = o.optString("body"), sendAt = o.optLong("sendAt")))
+            // Repeat rules travel with the message (the old IDs mean nothing after a restore)
+            o.optString("repeat").takeIf { it.isNotBlank() }?.let { Hub.orbit.setRepeat(id, it) }
+        } }
         j.objs("folders").forEach { o -> dao.addFolder(Folder(o.optLong("id"), o.optString("name"), o.optInt("sort"))) }
         j.objs("extras").forEach { o -> dao.putExtra(ContactExtra(o.getString("phoneKey"), o.optString("instagram"), o.optString("snapchat"),
             o.optString("tiktok"), o.optString("notes"), o.optString("birthday"), o.optString("life360Id"), o.optBoolean("priority"), o.optInt("groupColor"))) }
         j.objs("groups").forEach { o -> dao.putGroup(GroupInfo(o.getString("convKey"), o.optString("name"), o.optString("photoUri"))) }
-        j.optJSONObject("orbit")?.let { Hub.orbit.importJson(it) }
+        j.optJSONObject("orbit")?.let { o -> o.remove("repeat"); Hub.orbit.importJson(o) }
+        Arrivals.syncAll(ctx)
         MockStore.load()
         j.optJSONArray("mockFavorites")?.let { a ->
             val have = MockStore.favorites.value.map { it.id }.toSet()

@@ -180,6 +180,14 @@ object MockStore {
             .onFailure { HubLog.w("Mock", "send $action failed", it) }
     }
 
+    /** Orbit was opened and a mock should be running but isn't (Android stopped it): start it again. */
+    fun resumeIfNeeded(ctx: Context) {
+        load()
+        if (session() != null && !_state.value.active) runCatching {
+            ContextCompat.startForegroundService(ctx, Intent(ctx, MockService::class.java).setAction(MockService.START))
+        }.onFailure { HubLog.w("Mock", "resume on open failed", it) }
+    }
+
     /** After a restart: resume a session that was running, and re-arm schedules. */
     fun onBoot(ctx: Context) {
         load()
@@ -243,7 +251,7 @@ object MockSetup {
  * so every app on the phone sees it.
  */
 class MockService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> HubLog.w("Mock", "job failed", e) })
     private var loop: Job? = null
     private val lm by lazy { getSystemService(LocationManager::class.java) }
     private var added = emptyList<String>()
@@ -271,9 +279,13 @@ class MockService : Service() {
     }
 
     private fun begin() {
+        stopped = false
         // Must go foreground right away, even if there's nothing to run
         createChannel(this)
-        startInForeground(note("Starting mock location…", null))
+        // When Android restarts the service in the background it may refuse foreground; keep the
+        // session saved (it resumes the next time Orbit opens or after a restart) instead of crashing
+        val fg = runCatching { startInForeground(note("Starting mock location…", null)) }
+        if (fg.isFailure) { HubLog.w("Mock", "can't go foreground now, will resume when Orbit opens", fg.exceptionOrNull()); stopSelf(); return }
         val (it, prog, wasPaused) = MockStore.session() ?: run { end(); return }
         if (!MockSetup.isMockApp(this)) return fail("Pick Orbit in Developer options → Select mock location app.")
         item = it; progress = prog; paused = wasPaused
@@ -320,6 +332,7 @@ class MockService : Service() {
 
     @Synchronized
     private fun tick(advance: Boolean, dt: Double = 0.0) {
+        if (stopped) return
         val it = item ?: return
         val p = plan
         var routeFix: MockFix? = null
@@ -429,7 +442,12 @@ class MockService : Service() {
         added = emptyList()
     }
 
+    @Volatile private var stopped = false
+
+    @Synchronized
     private fun end() {
+        stopped = true
+        item = null
         loop?.cancel()
         removeProviders()
         MockStore.saveSession(null, 0.0, false)

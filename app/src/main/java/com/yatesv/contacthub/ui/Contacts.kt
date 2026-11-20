@@ -250,7 +250,9 @@ fun ContactScreen(number: String) {
                         QuickAction(Icons.Default.Call, "call") { CallManager.place(ctx, number) }
                         QuickAction(Icons.Default.Videocam, "video") { CallManager.place(ctx, number, video = true) }
                         QuickAction(Icons.Default.Directions, "directions", enabled = member?.lat != null) {
-                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${member?.lat},${member?.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            // Google Maps if installed, otherwise any maps app or the browser
+                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${member?.lat},${member?.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                .recoverCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${member?.lat},${member?.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                         }
                     }
                 }

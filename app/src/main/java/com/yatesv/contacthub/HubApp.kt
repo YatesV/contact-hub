@@ -45,7 +45,10 @@ object Hub {
     lateinit var contacts: ContactsRepo
     lateinit var l360: Life360
     lateinit var orbit: com.yatesv.contacthub.data.OrbitStore
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Background work. A failure in one job is logged instead of crashing the whole app. */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+        com.yatesv.contacthub.data.HubLog.w("Hub", "background job failed: " + e.stackTraceToString().take(1500), e)
+    })
 
     /** Bumped whenever messages change, so open screens reload. */
     val version = MutableStateFlow(0L)
@@ -75,6 +78,7 @@ class HubApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Hub.app = this
+        com.yatesv.contacthub.engine.CrashLog.install(this)
         com.yatesv.contacthub.data.HubLog.init(this)
         Hub.db = HubDb.create(this)
         Hub.settings = SettingsStore(this)
@@ -87,7 +91,6 @@ class HubApp : Application() {
         com.yatesv.contacthub.engine.MockService.createChannel(this)
         com.yatesv.contacthub.engine.OrbitNotes.channel(this)
         runCatching { com.yatesv.contacthub.engine.DailyWorker.schedule(this) }
-        runCatching { com.yatesv.contacthub.engine.Arrivals.sync(this) }
         runCatching { scheduleWork(this) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
         Hub.scope.launch { runCatching { Hub.contacts.all() } }
     }

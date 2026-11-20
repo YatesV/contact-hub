@@ -73,12 +73,15 @@ object CallManager {
         val audio = service?.callAudioState
         ui.value = CallUi(
             number = number, state = st,
-            connectedAt = if (st == Call.STATE_ACTIVE) (prev?.connectedAt?.takeIf { it > 0 } ?: System.currentTimeMillis()) else prev?.connectedAt ?: 0,
+            // Keep the timer only for the same call (call waiting used to show the first call's time)
+            connectedAt = (prev?.takeIf { it.number == number }?.connectedAt ?: 0).let { kept ->
+                if (st == Call.STATE_ACTIVE) kept.takeIf { it > 0 } ?: System.currentTimeMillis() else kept
+            },
             muted = audio?.isMuted == true,
             speaker = audio?.route == CallAudioState.ROUTE_SPEAKER,
             onHold = st == Call.STATE_HOLDING,
             outgoing = d.callDirection == Call.Details.DIRECTION_OUTGOING,
-            verificationFailed = d.callerNumberVerificationStatus == android.telecom.Connection.VERIFICATION_STATUS_FAILED,
+            verificationFailed = android.os.Build.VERSION.SDK_INT >= 30 && d.callerNumberVerificationStatus == android.telecom.Connection.VERIFICATION_STATUS_FAILED,
         )
         ui.value?.let { if (it.connectedAt > 0 && it.number.isNotBlank()) lastConnected = it.number to it.connectedAt }
         service?.let { svc -> if (st == Call.STATE_RINGING) showRinging(svc, number) else NotificationManagerCompat.from(svc).cancel(NOTIF_ID) }

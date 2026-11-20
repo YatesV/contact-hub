@@ -264,7 +264,7 @@ fun FriendSyncScreen(social: Social) {
                             else "Found ${matches.size} of your contacts. Check the right ones:",
                             Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge)
                         LazyColumn(Modifier.weight(1f)) {
-                            items(matches, key = { it.phoneKey }) { m ->
+                            items(matches, key = { it.phoneKey + "|" + it.friend.username }) { m ->
                                 Row(Modifier.fillMaxWidth().clickable {
                                     checked = if (m.phoneKey in checked) checked - m.phoneKey else checked + m.phoneKey
                                 }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {

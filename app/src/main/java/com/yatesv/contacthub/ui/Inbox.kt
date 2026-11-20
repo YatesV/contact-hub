@@ -196,7 +196,9 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
 
     LaunchedEffect(version, settings.olderThan6Months) {
         if (rows != null) kotlinx.coroutines.delay(150)
-        rows = runCatching { InboxData.load() }.getOrDefault(rows ?: emptyList()).also { InboxData.cache = it }
+        // Off the main thread: it reads contacts/blocked numbers and runs text checks for every chat
+        rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { InboxData.load() }.getOrNull() } ?: rows ?: emptyList()
+        InboxData.cache = rows
     }
 
     val visible = rows.orEmpty().filter { r ->
@@ -315,7 +317,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                     TextButton({ snoozeFor = r; actionsFor = null }, Modifier.fillMaxWidth()) { Text(if (snoozes.containsKey(r.key)) "Snoozed · change…" else "Snooze…", Modifier.fillMaxWidth()) }
                     TextButton({ folderFor = r; actionsFor = null }, Modifier.fillMaxWidth()) { Text("Move to folder…", Modifier.fillMaxWidth()) }
                     if (!r.isGroup && r.addresses.isNotEmpty()) {
-                        val blocked = r.category == Category.SPAM && Hub.contacts.isBlocked(r.addresses[0])
+                        val blocked = remember(r.key, r.category) { r.category == Category.SPAM && runCatching { Hub.contacts.isBlocked(r.addresses[0]) }.getOrDefault(false) }
                         act(if (blocked) "Unblock" else "Block") {
                             if (!Hub.contacts.setBlocked(r.addresses[0], !blocked)) Hub.banner.value = "Make Orbit your default phone app to block numbers."
                             Hub.changed()

@@ -172,11 +172,11 @@ fun ArrivalsPage() {
     val v by Hub.orbit.version.collectAsState()
     val rules = remember(v) { Hub.orbit.arrivals() }
     var tick by remember { mutableIntStateOf(0) }
-    LifecycleResumeEffect(Unit) { tick++; Arrivals.sync(ctx); onPauseOrDispose { } }
+    LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
     @Suppress("UNUSED_EXPRESSION") tick
     var adding by remember { mutableStateOf(false) }
-    val fine = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++; Arrivals.sync(ctx) }
-    val bg = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++; Arrivals.sync(ctx) }
+    val fine = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++; Arrivals.syncAll(ctx) }
+    val bg = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
 
     Text("Orbit sends your text when you really arrive somewhere (a running mock location doesn't count). It sends once per visit, at most every 2 hours.",
         Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -189,13 +189,13 @@ fun ArrivalsPage() {
     rules.forEach { r ->
         val name = Hub.contacts.cached(r.to)?.name ?: Phone.pretty(r.to)
         SettingRow("${r.place} → $name", "\"${r.text}\" · ${if (r.everyTime) "every time" else "once"} · ${r.radiusM} m", Icons.Default.Place) {
-            Switch(r.on, { on -> Hub.orbit.saveArrival(r.copy(on = on)); Arrivals.sync(ctx) })
-            IconButton({ Arrivals.remove(ctx, r.id); Arrivals.sync(ctx) }) { Icon(Icons.Default.Close, "Delete") }
+            Switch(r.on, { on -> r.copy(on = on).let { n -> Hub.orbit.saveArrival(n); Arrivals.register(ctx, n) } })
+            IconButton({ Arrivals.remove(ctx, r.id) }) { Icon(Icons.Default.Close, "Delete") }
         }
     }
     if (rules.isEmpty()) Text("No arrival texts yet.", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
     Button({ adding = true }, Modifier.padding(16.dp)) { Text("+ New arrival text") }
-    if (adding) ArrivalEditor { r -> adding = false; if (r != null) { Hub.orbit.saveArrival(r); Arrivals.sync(ctx) } }
+    if (adding) ArrivalEditor { r -> adding = false; if (r != null) { Hub.orbit.saveArrival(r); Arrivals.register(ctx, r) } }
 }
 
 @SuppressLint("MissingPermission")

@@ -16,15 +16,26 @@ object HubLog {
     private var file: File? = null
     private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
+    private var writes = 0
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     fun init(ctx: Context) {
-        file = File(ctx.filesDir, "hub.log")
-        runCatching { file?.readLines()?.takeLast(MAX_LINES)?.let { synchronized(lines) { lines.addAll(it) } } }
+        val f = File(ctx.filesDir, "hub.log")
+        file = f
+        // Read only the end of the file, off the main thread (it used to read everything at every start)
+        io.execute {
+            runCatching {
+                val tail = if (f.length() > 600_000) java.io.RandomAccessFile(f, "r").use { r ->
+                    r.seek(f.length() - 600_000); val b = ByteArray(600_000); r.readFully(b); String(b).substringAfter('\n').lines()
+                } else f.readLines()
+                synchronized(lines) { val now = lines.toList(); lines.clear(); lines.addAll(tail.filter { it.isNotBlank() }.takeLast(MAX_LINES)); lines.addAll(now); while (lines.size > MAX_LINES) lines.removeFirst() }
+                f.writeText(snapshot().joinToString("\n") + "\n")
+            }
+        }
     }
 
     fun d(tag: String, msg: String) = add("D", tag, msg)
     fun w(tag: String, msg: String, e: Throwable? = null) = add("W", tag, msg + (e?.let { " | ${it.javaClass.simpleName}: ${it.message}" } ?: ""))
-
-    private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private fun add(level: String, tag: String, msg: String) = runCatching {
         android.util.Log.println(if (level == "W") android.util.Log.WARN else android.util.Log.DEBUG, "ContactHub", "$tag: $msg")
@@ -32,7 +43,8 @@ object HubLog {
             val l = "${fmt.format(Date())} $level/$tag: $msg"
             lines.addLast(l)
             while (lines.size > MAX_LINES) lines.removeFirst()
-            l to (lines.size % 200 == 0)
+            // Rewrite the file every 200 lines so it stays the size of the in-memory log
+            l to (++writes % 200 == 0)
         }
         // File writes happen off the main thread
         io.execute {

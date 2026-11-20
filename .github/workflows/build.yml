@@ -1,0 +1,49 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ContactHub.apk
+
+      - name: Upload as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ContactHub-apk
+          path: ContactHub.apk
+
+      # Fixed link you can open on your phone:
+      # https://github.com/YatesV/contact-hub/releases/latest/download/ContactHub.apk
+      - name: Publish to "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest ContactHub.apk \
+            --target "${{ github.sha }}" \
+            --title "Contact Hub build #${{ github.run_number }}" \
+            --notes "Download **ContactHub.apk** below and open it on your phone to install. Updates install over the old version and keep your data." \
+            --latest

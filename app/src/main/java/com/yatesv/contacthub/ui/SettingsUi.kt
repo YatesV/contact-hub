@@ -84,25 +84,25 @@ fun SettingsHome() {
         Column(Modifier.padding(pad).verticalScroll(rememberScrollState())) {
             UpdateBanner()
             SettingsGroup {
-                SettingRow("Setup wizard", "Step-by-step setup with pictures", Icons.Default.CheckCircle) { Nav.go(Screen.Setup) }
-                SettingRow("Permissions checklist", "See what's on and off", Icons.Default.Security) { Nav.go(Screen.SettingsPage("setup")) }
+                SettingRow("Setup wizard", "Step-by-step setup with pictures", Icons.Default.CheckCircle, onClick = { Nav.go(Screen.Setup) })
+                SettingRow("Permissions checklist", "See what's on and off", Icons.Default.Security, onClick = { Nav.go(Screen.SettingsPage("setup")) })
             }
             SettingsGroup {
-            SettingRow("Look & feel", "Theme, colors, fonts, bubbles, layout, wallpaper", Icons.Default.Palette) { Nav.go(Screen.SettingsPage("look")) }
-            SettingRow("Motion & feel", "Animation style with live graph, menus, vibration, effects", Icons.Default.Animation) { Nav.go(Screen.SettingsPage("motion")) }
+            SettingRow("Look & feel", "Theme, colors, fonts, bubbles, layout, wallpaper", Icons.Default.Palette, onClick = { Nav.go(Screen.SettingsPage("look")) })
+            SettingRow("Motion & feel", "Animation style with live graph, menus, vibration, effects", Icons.Default.Animation, onClick = { Nav.go(Screen.SettingsPage("motion")) })
             }
             SettingsGroup {
-            SettingRow("Messaging", "Texting mode, RCS, reactions, auto-reply, @mentions", Icons.AutoMirrored.Filled.Chat) { Nav.go(Screen.SettingsPage("messaging")) }
-            SettingRow("Notifications", "Previews, sounds, priority contacts", Icons.Default.Notifications) { Nav.go(Screen.SettingsPage("notifications")) }
-            SettingRow("Privacy & security", "App lock, hidden chats, blocked numbers", Icons.Default.Lock) { Nav.go(Screen.SettingsPage("privacy")) }
-            SettingRow("Life360", "Sign in, refresh rate", Icons.Default.LocationOn) { Nav.go(Screen.SettingsPage("life360")) }
-            SettingRow("Backup", "Daily backup, Google Drive, export, restore", Icons.Default.Backup) { Nav.go(Screen.SettingsPage("backup")) }
+            SettingRow("Messaging", "Texting mode, RCS, reactions, auto-reply, @mentions", Icons.AutoMirrored.Filled.Chat, onClick = { Nav.go(Screen.SettingsPage("messaging")) })
+            SettingRow("Notifications", "Previews, sounds, priority contacts", Icons.Default.Notifications, onClick = { Nav.go(Screen.SettingsPage("notifications")) })
+            SettingRow("Privacy & security", "App lock, hidden chats, blocked numbers", Icons.Default.Lock, onClick = { Nav.go(Screen.SettingsPage("privacy")) })
+            SettingRow("Life360", "Sign in, refresh rate", Icons.Default.LocationOn, onClick = { Nav.go(Screen.SettingsPage("life360")) })
+            SettingRow("Backup", "Daily backup, Google Drive, export, restore", Icons.Default.Backup, onClick = { Nav.go(Screen.SettingsPage("backup")) })
             }
             SettingsGroup {
-                SettingRow("Privacy & data", "What's stored, what leaves your phone, delete everything", Icons.Default.Shield) { Nav.go(Screen.SettingsPage("privacydata")) }
-                SettingRow("Developer", "Full self-test, activity log (.txt)", Icons.Default.BugReport) { Nav.go(Screen.SettingsPage("developer")) }
-                SettingRow("About & updates", "Build ${BuildConfig.VERSION_CODE}", Icons.Default.Info) { Nav.go(Screen.SettingsPage("about")) }
-                SettingRow("Open-source licenses", null, Icons.Default.Description) { Nav.go(Screen.SettingsPage("licenses")) }
+                SettingRow("Privacy & data", "What's stored, what leaves your phone, delete everything", Icons.Default.Shield, onClick = { Nav.go(Screen.SettingsPage("privacydata")) })
+                SettingRow("Developer", "Full self-test, activity log (.txt)", Icons.Default.BugReport, onClick = { Nav.go(Screen.SettingsPage("developer")) })
+                SettingRow("About & updates", "Build ${BuildConfig.VERSION_CODE}", Icons.Default.Info, onClick = { Nav.go(Screen.SettingsPage("about")) })
+                SettingRow("Open-source licenses", null, Icons.Default.Description, onClick = { Nav.go(Screen.SettingsPage("licenses")) })
             }
             Spacer(Modifier.height(24.dp))
         }

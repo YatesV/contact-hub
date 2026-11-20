@@ -154,7 +154,12 @@ fun SetupWizard(first: Boolean) {
     BackHandler(index > 0 || life360) { if (life360) life360 = false else prev() }
     if (life360) { Life360SignInScreen(onDone = { life360 = false }); return }
 
-    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++; Hub.changed() }
+    var permsBlocked by remember { mutableStateOf(false) }
+    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        // Android 15 blocks SMS/call-log permissions for apps installed from a file until "restricted settings" are allowed
+        permsBlocked = res.filterKeys { it.contains("SMS") || it.contains("CALL_LOG") }.values.any { !it }
+        tick++; Hub.changed()
+    }
     val role = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { tick++ }
 
     // Came back with the step done: tick, then move on by itself
@@ -180,6 +185,14 @@ fun SetupWizard(first: Boolean) {
                     Step.PERMS -> StepPage("Allow access", "So Contact Hub can show your texts, contacts and calls. Tap the button and choose Allow on each one.",
                         done(s), { PhoneMock(listOf("Allow Contact Hub to send and view SMS?"), dialog = true) }) {
                         Button({ perms.launch(setupPerms) }, Modifier.fillMaxWidth()) { Text("Allow") }
+                        if (permsBlocked) {
+                            Text("Android blocked texts/calls access (\"App was denied access to SMS\"). That's normal for apps installed from a file. Unlock it once:",
+                                Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                            Text("Tap Unlock → ⋮ (top right) → Allow restricted settings → confirm → come back and tap Allow again.",
+                                Modifier.padding(vertical = 8.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
+                            PhoneMock(listOf("App info", "Contact Hub"), menu = true)
+                            OutlinedButton({ openAppInfo(ctx) }, Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Unlock") }
+                        }
                     }
                     Step.ACCESS -> StepPage("Turn on the RCS sender",
                         "This lets Contact Hub tap Send inside Google Messages, so your texts go over RCS. Tap Open, then switch on \"Contact Hub RCS sender\".",
@@ -282,7 +295,7 @@ private fun RestrictedHelp(ctx: Context) {
     TextButton({ open = !open }) { Text(if (open) "Hide help" else "Switch is greyed out / says \"Restricted setting\"?") }
     if (open) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp)) {
         Text("That's normal for apps installed from a file. To unlock it:", fontWeight = FontWeight.SemiBold)
-        Text("1. Tap the switch once so Android shows \"Restricted setting\", then tap OK.\n" +
+        Text("1. Tap the switch once so Android shows \"Restricted setting\", then tap OK. (Already did this for text permissions? Skip to 4.)\n" +
             "2. Tap Unlock below. It opens Contact Hub's App info.\n" +
             "3. Tap ⋮ in the top right → Allow restricted settings → confirm with your fingerprint/PIN.\n" +
             "4. Come back here and tap Open again. The switch works now.",

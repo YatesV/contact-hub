@@ -79,6 +79,15 @@ class ScreensTest {
     @Test fun shareSocial() { show { ShareSocialScreen(Social.INSTAGRAM, "someone") } }
     @Test fun settingsHome() { show { SettingsHome() }; rule.onNodeWithText("Look & feel").assertExists() }
 
+    /** Regression: opening Settings must not open any sub-page by itself. */
+    @Test fun settingsHomeDoesNotNavigate() {
+        com.yatesv.contacthub.ui.Nav.stack.retainAll { it == com.yatesv.contacthub.ui.Screen.Tabs }
+        show { SettingsHome() }
+        org.junit.Assert.assertEquals(1, com.yatesv.contacthub.ui.Nav.stack.size)
+        rule.onNodeWithText("Look & feel").performClick(); rule.waitForIdle()
+        org.junit.Assert.assertEquals(com.yatesv.contacthub.ui.Screen.SettingsPage("look"), com.yatesv.contacthub.ui.Nav.top)
+    }
+
     @Test fun everySettingsPage() {
         val pages = listOf("setup", "look", "motion", "messaging", "notifications", "privacy", "life360", "backup",
             "privacydata", "developer", "about", "licenses")

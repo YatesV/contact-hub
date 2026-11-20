@@ -36,9 +36,26 @@ import org.robolectric.annotation.Config
 class ScreensTest {
     @get:Rule val rule = createComposeRule()
 
+    /**
+     * Screens have looping animations (pulsing hints, live previews), so the test clock is stepped by
+     * hand instead of waiting for "idle", which would never come.
+     */
     private fun show(content: @Composable () -> Unit) {
+        rule.mainClock.autoAdvance = false
         rule.setContent { HubTheme { content() } }
-        rule.waitForIdle()
+        settle()
+    }
+
+    private fun settle(ms: Long = 1500) {
+        repeat((ms / 100).toInt()) { rule.mainClock.advanceTimeBy(100); Thread.sleep(15) }
+    }
+
+    private fun waitForText(text: String) {
+        repeat(60) {
+            if (rule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
+            settle(100); Thread.sleep(40)
+        }
+        rule.onNodeWithText(text).assertExists()
     }
 
     @Test fun inbox() { show { InboxScreen() }; rule.onNodeWithText("Messages").assertExists() }
@@ -49,7 +66,7 @@ class ScreensTest {
             Hub.db.dao().addLocal(com.yatesv.contacthub.data.LocalMessage(convKey = "3375550101", body = "inbox row test", date = System.currentTimeMillis(), outgoing = false))
         }
         show { InboxScreen() }
-        rule.waitUntil(5000) { rule.onAllNodesWithText("inbox row test").fetchSemanticsNodes().isNotEmpty() }
+        waitForText("inbox row test")
     }
 
     @Test fun chatShowsMessages() {
@@ -57,7 +74,7 @@ class ScreensTest {
             Hub.db.dao().addLocal(com.yatesv.contacthub.data.LocalMessage(convKey = "3375550109", body = "chat bubble test", date = System.currentTimeMillis(), outgoing = true, source = "sent"))
         }
         show { ChatScreen("3375550109") }
-        rule.waitUntil(5000) { rule.onAllNodesWithText("chat bubble test").fetchSemanticsNodes().isNotEmpty() }
+        waitForText("chat bubble test")
     }
     @Test fun inboxArchived() { show { InboxScreen(InboxMode.ARCHIVED) }; rule.onNodeWithText("Archived").assertExists() }
     @Test fun inboxHidden() { show { InboxScreen(InboxMode.HIDDEN) } }
@@ -69,8 +86,8 @@ class ScreensTest {
     @Test fun dialer() { show { DialerScreen() }; rule.onNodeWithText("Keypad").assertExists() }
     @Test fun dialerTabs() {
         show { DialerScreen() }
-        rule.onNodeWithText("Recents").performClick(); rule.waitForIdle()
-        rule.onNodeWithText("Favorites").performClick(); rule.waitForIdle()
+        rule.onNodeWithText("Recents").performClick(); settle()
+        rule.onNodeWithText("Favorites").performClick(); settle()
     }
     @Test fun newChat() { show { NewChatScreen() } }
     @Test fun search() { show { SearchScreen() } }
@@ -84,7 +101,7 @@ class ScreensTest {
         com.yatesv.contacthub.ui.Nav.stack.retainAll { it == com.yatesv.contacthub.ui.Screen.Tabs }
         show { SettingsHome() }
         org.junit.Assert.assertEquals(1, com.yatesv.contacthub.ui.Nav.stack.size)
-        rule.onNodeWithText("Look & feel").performClick(); rule.waitForIdle()
+        rule.onNodeWithText("Look & feel").performClick(); settle()
         org.junit.Assert.assertEquals(com.yatesv.contacthub.ui.Screen.SettingsPage("look"), com.yatesv.contacthub.ui.Nav.top)
     }
 
@@ -92,8 +109,9 @@ class ScreensTest {
         val pages = listOf("setup", "look", "motion", "messaging", "notifications", "privacy", "life360", "backup",
             "privacydata", "developer", "about", "licenses")
         var page by mutableStateHolder("setup")
+        rule.mainClock.autoAdvance = false
         rule.setContent { HubTheme { SettingsPage(page.value) } }
-        pages.forEach { p -> rule.runOnIdle { page.value = p }; rule.waitForIdle() }
+        pages.forEach { p -> page.value = p; settle() }
     }
 
     @Test fun curveEditor() {
@@ -110,14 +128,14 @@ class ScreensTest {
             val next = rule.onAllNodesWithText("Next").fetchSemanticsNodes().isNotEmpty()
             if (next) rule.onNodeWithText("Next").performClick()
             else if (rule.onAllNodesWithText("Do this later").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithText("Do this later").performClick()
-            rule.waitForIdle()
+            settle()
         }
     }
 
     @Test fun setupWizardContactHubMode() {
         show { SetupWizard(first = true) }
         rule.onNodeWithText("Contact Hub mode").performClick()
-        rule.onNodeWithText("Next").performClick(); rule.waitForIdle()
+        rule.onNodeWithText("Next").performClick(); settle()
     }
 }
 

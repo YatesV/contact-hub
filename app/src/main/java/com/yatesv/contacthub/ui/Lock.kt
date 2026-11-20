@@ -56,7 +56,7 @@ fun unlockHidden(act: MainActivity, onOk: () -> Unit) {
     val s = Hub.settings.value
     when {
         s.useBiometric && canUseBiometric(act) -> biometricPrompt(act, "Unlock hidden chats") { Nav.hiddenUnlocked = true; onOk() }
-        s.pinHash.isNotBlank() -> { act.locked = true; Nav.hiddenUnlocked = true; Nav.go(Screen.Hidden) }
+        s.pinHash.isNotBlank() -> { Nav.openHiddenAfterUnlock = true; Nav.locked = true }
         else -> Toast.makeText(act, "Set a PIN or fingerprint in Settings > Privacy first", Toast.LENGTH_LONG).show()
     }
 }

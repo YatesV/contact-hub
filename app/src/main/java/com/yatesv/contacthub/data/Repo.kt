@@ -47,10 +47,10 @@ data class ContactInfo(
 
 data class CallEntry(val id: Long, val number: String, val date: Long, val duration: Long, val type: Int, val name: String?)
 
-private inline fun <T> Cursor?.rows(block: (Cursor) -> T): List<T> {
+private inline fun <T> Cursor?.rows(max: Int = Int.MAX_VALUE, block: (Cursor) -> T): List<T> {
     if (this == null) return emptyList()
     val out = ArrayList<T>()
-    use { while (it.moveToNext()) out += block(it) }
+    use { while (out.size < max && it.moveToNext()) out += block(it) }
     return out
 }
 
@@ -63,11 +63,33 @@ class SmsRepo(private val ctx: Context) {
     private val cr get() = ctx.contentResolver
     private val sixMonths = 183L * 24 * 3600 * 1000
 
+    /** Conversation key -> SMS thread id, filled every time the inbox loads. */
+    private val threadIds = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     @SuppressLint("Recycle")
     suspend fun conversations(includeOld: Boolean): List<Conv> = withContext(Dispatchers.IO) {
         val since = if (includeOld) 0L else System.currentTimeMillis() - sixMonths
         val result = runCatching { fromThreads(since) }.getOrNull()
-        if (result.isNullOrEmpty()) runCatching { fromMessages(since) }.getOrDefault(emptyList()) else result
+        val list = if (result.isNullOrEmpty()) runCatching { fromMessages(since) }.getOrDefault(emptyList()) else result
+        // Newest first: keep the newest thread when two share a key (that's the one the inbox shows)
+        val fresh = LinkedHashMap<String, Long>()
+        list.forEach { fresh.putIfAbsent(it.key, it.threadId) }
+        threadIds.putAll(fresh)
+        list
+    }
+
+    /**
+     * The SMS thread for a conversation key. Looks it up from the real conversation list first,
+     * because asking Android to "get or create" a thread with a reformatted number can return a
+     * different, empty thread on some phones.
+     */
+    suspend fun threadIdFor(key: String): Long = withContext(Dispatchers.IO) {
+        if (key.startsWith("g:") || key.isBlank()) return@withContext 0L
+        threadIds[key]?.let { return@withContext it }
+        conversations(includeOld = true)
+        threadIds[key]?.let { return@withContext it }
+        // Brand new chat: no thread yet (one gets made when the first message is sent)
+        0L
     }
 
     private fun canonical(): Map<Long, String> =
@@ -133,10 +155,10 @@ class SmsRepo(private val ctx: Context) {
 
     suspend fun messages(threadId: Long, limit: Int = 600): List<Msg> = withContext(Dispatchers.IO) {
         if (threadId <= 0) return@withContext emptyList()
-        val sms = cr.query(
+        val sms = runCatching { cr.query(
             Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type", "status"),
-            "thread_id = ?", arrayOf(threadId.toString()), "date DESC LIMIT $limit",
-        ).rows { c ->
+            "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
+        ).rows(limit) { c ->
             val type = c.int("type")
             Msg(
                 key = "s:${c.long("_id")}", body = c.str("body"), date = c.long("date"),
@@ -147,12 +169,13 @@ class SmsRepo(private val ctx: Context) {
                     else -> 0
                 },
             )
-        }
-        val mms = cr.query(
+        } }.onFailure { android.util.Log.w("ContactHub", "SMS read failed", it) }.getOrDefault(emptyList())
+        val mms = runCatching { cr.query(
             Telephony.Mms.CONTENT_URI, arrayOf("_id", "date", "msg_box"),
-            "thread_id = ?", arrayOf(threadId.toString()), "date DESC LIMIT $limit",
-        ).rows { c -> Triple(c.long("_id"), c.long("date") * 1000, c.int("msg_box")) }
-            .map { (id, date, box) -> mmsMessage(id, date, box) }
+            "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
+        ).rows(limit) { c -> Triple(c.long("_id"), c.long("date") * 1000, c.int("msg_box")) }
+            .map { (id, date, box) -> runCatching { mmsMessage(id, date, box) }.getOrElse { Msg("m:$id", "", date, box != 1) } }
+        }.onFailure { android.util.Log.w("ContactHub", "MMS read failed", it) }.getOrDefault(emptyList())
         (sms + mms).sortedBy { it.date }
     }
 
@@ -204,8 +227,8 @@ class SmsRepo(private val ctx: Context) {
         if (q.isBlank()) return@withContext emptyList()
         cr.query(
             Telephony.Sms.CONTENT_URI, arrayOf("_id", "thread_id", "address", "body", "date", "type"),
-            "body LIKE ?", arrayOf("%$q%"), "date DESC LIMIT 200",
-        ).rows { c ->
+            "body LIKE ? ESCAPE '\\'", arrayOf("%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"), "date DESC",
+        ).rows(200) { c ->
             SearchHit(
                 c.long("thread_id"), c.str("address"),
                 Msg("s:${c.long("_id")}", c.str("body"), c.long("date"), c.int("type") != 1, c.str("address")),

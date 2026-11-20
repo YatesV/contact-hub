@@ -29,7 +29,10 @@ import java.util.concurrent.TimeUnit
 class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
     override suspend fun doWork(): Result {
         val dao = Hub.db.dao()
+        if (dao.failStuckScheduled(System.currentTimeMillis() - 10 * 60_000) > 0)
+            Notifier.status(applicationContext, 7300, "A scheduled message may not have sent", "Check the Scheduled list and the chat.")
         for (s in dao.dueScheduled(System.currentTimeMillis())) {
+            if (dao.claimScheduled(s.id) == 0) continue
             val r = Sender.send(applicationContext, s.convKey, s.body, s.addresses.split(',').filter { it.isNotBlank() })
             dao.setScheduled(s.id, if (r.ok) "sent" else "failed")
             if (!r.ok) Notifier.status(applicationContext, s.id.toInt(), "Scheduled message not sent", r.error)
@@ -43,6 +46,36 @@ class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 "scheduled-${System.currentTimeMillis() + delayMs}", ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<ScheduleWorker>().setInitialDelay(delayMs.coerceAtLeast(0), TimeUnit.MILLISECONDS).build(),
+            )
+        }
+    }
+}
+
+/** Sends a reply typed into a notification. Runs as a job so it isn't cut off. */
+class ReplyWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
+    override suspend fun doWork(): Result {
+        val key = inputData.getString("conv") ?: return Result.failure()
+        val text = inputData.getString("text") ?: return Result.failure()
+        // From a notification you're not looking at the app, so don't pop Google Messages open
+        val r = Sender.send(applicationContext, key, text, allowDriving = false)
+        com.yatesv.contacthub.engine.ActionReceiver.markRead(key)
+        if (!r.ok) Notifier.status(applicationContext, key.hashCode(), "Reply not sent", r.error)
+        return Result.success()
+    }
+
+    override suspend fun getForegroundInfo(): androidx.work.ForegroundInfo {
+        val n = androidx.core.app.NotificationCompat.Builder(applicationContext, Notifier.CH_STATUS)
+            .setSmallIcon(com.yatesv.contacthub.R.drawable.ic_tile).setContentTitle("Sending…").build()
+        return androidx.work.ForegroundInfo(7200, n)
+    }
+
+    companion object {
+        fun enqueue(ctx: Context, key: String, text: String) {
+            WorkManager.getInstance(ctx).enqueue(
+                OneTimeWorkRequestBuilder<ReplyWorker>()
+                    .setInputData(androidx.work.workDataOf("conv" to key, "text" to text))
+                    .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                    .build(),
             )
         }
     }
@@ -106,7 +139,13 @@ object Backup {
     suspend fun writeDaily(ctx: Context): File {
         val name = "contacthub-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".json"
         val f = File(dir(ctx), name)
-        f.writeText(build(ctx).toString())
+        val json = build(ctx).toString()
+        f.writeText(json)
+        // Also overwrite the Google Drive copy, if Drive is connected
+        Hub.settings.value.driveUri.takeIf { it.isNotBlank() }?.let { u ->
+            runCatching { ctx.contentResolver.openOutputStream(Uri.parse(u), "wt")?.use { it.write(json.toByteArray()) } }
+                .onFailure { com.yatesv.contacthub.data.HubLog.w("Backup", "Drive write failed", it) }
+        }
         dir(ctx).listFiles()?.filter { it.name.startsWith("contacthub-") }?.sortedByDescending { it.name }?.drop(7)?.forEach { it.delete() }
         Hub.settings.update { it.copy(lastBackup = System.currentTimeMillis()) }
         return f

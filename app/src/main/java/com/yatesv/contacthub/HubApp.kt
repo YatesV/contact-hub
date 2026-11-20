@@ -69,6 +69,7 @@ class HubApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Hub.app = this
+        com.yatesv.contacthub.data.HubLog.init(this)
         Hub.db = HubDb.create(this)
         Hub.settings = SettingsStore(this)
         Hub.sms = SmsRepo(this)
@@ -76,7 +77,7 @@ class HubApp : Application() {
         Hub.l360 = Life360(this)
         Configuration.getInstance().userAgentValue = packageName
         Notifier.createChannels(this)
-        scheduleWork(this)
+        runCatching { scheduleWork(this) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
         Hub.scope.launch { runCatching { Hub.contacts.all() } }
     }
 

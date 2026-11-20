@@ -121,6 +121,7 @@ interface HubDao {
     suspend fun findReaction(key: String, msgKey: String, fromMe: Boolean, emoji: String): Reaction?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addReaction(r: Reaction): Long
     @Query("UPDATE Reaction SET pending = 0 WHERE id = :id") suspend fun reactionSent(id: Long)
+    @Query("SELECT * FROM Reaction WHERE id = :id") suspend fun reaction(id: Long): Reaction?
     @Query("DELETE FROM Reaction WHERE id = :id") suspend fun deleteReaction(id: Long)
 
     @Query("SELECT * FROM Starred ORDER BY date DESC") fun starredFlow(): Flow<List<Starred>>
@@ -133,6 +134,10 @@ interface HubDao {
     @Query("SELECT * FROM Scheduled") suspend fun allScheduled(): List<Scheduled>
     @Insert suspend fun schedule(s: Scheduled): Long
     @Query("UPDATE Scheduled SET status = :status WHERE id = :id") suspend fun setScheduled(id: Long, status: String)
+    /** Returns 1 if this worker got the message, 0 if another one already took it. */
+    @Query("UPDATE Scheduled SET status = 'sending' WHERE id = :id AND status = 'waiting'") suspend fun claimScheduled(id: Long): Int
+    /** Sends that got cut off (phone restarted mid-send) are marked failed rather than retried, to avoid doubles. */
+    @Query("UPDATE Scheduled SET status = 'failed' WHERE status = 'sending' AND sendAt < :before") suspend fun failStuckScheduled(before: Long): Int
     @Query("DELETE FROM Scheduled WHERE id = :id") suspend fun deleteScheduled(id: Long)
 
     @Query("SELECT * FROM Folder ORDER BY sort, id") fun foldersFlow(): Flow<List<Folder>>

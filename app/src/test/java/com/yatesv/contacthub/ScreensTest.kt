@@ -1,0 +1,112 @@
+package com.yatesv.contacthub
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import com.yatesv.contacthub.data.Social
+import com.yatesv.contacthub.ui.ChatScreen
+import com.yatesv.contacthub.ui.ContactScreen
+import com.yatesv.contacthub.ui.ContactsScreen
+import com.yatesv.contacthub.ui.DialerScreen
+import com.yatesv.contacthub.ui.HubTheme
+import com.yatesv.contacthub.ui.InboxMode
+import com.yatesv.contacthub.ui.InboxScreen
+import com.yatesv.contacthub.ui.NewChatScreen
+import com.yatesv.contacthub.ui.ScheduledScreen
+import com.yatesv.contacthub.ui.SearchScreen
+import com.yatesv.contacthub.ui.SettingsHome
+import com.yatesv.contacthub.ui.SettingsPage
+import com.yatesv.contacthub.ui.SetupWizard
+import com.yatesv.contacthub.ui.ShareSocialScreen
+import com.yatesv.contacthub.ui.StarredScreen
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * Opens every screen in a simulated phone and makes sure it draws without crashing.
+ * (Real texts, RCS and calls need a real phone; this catches layout and logic crashes.)
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = HubApp::class)
+class ScreensTest {
+    @get:Rule val rule = createComposeRule()
+
+    private fun show(content: @Composable () -> Unit) {
+        rule.setContent { HubTheme { content() } }
+        rule.waitForIdle()
+    }
+
+    @Test fun inbox() { show { InboxScreen() }; rule.onNodeWithText("Messages").assertExists() }
+
+    /** Regression: chats must actually show up in the list (a stray line break once hid them all). */
+    @Test fun inboxShowsChats() {
+        kotlinx.coroutines.runBlocking {
+            Hub.db.dao().addLocal(com.yatesv.contacthub.data.LocalMessage(convKey = "3375550101", body = "inbox row test", date = System.currentTimeMillis(), outgoing = false))
+        }
+        show { InboxScreen() }
+        rule.waitUntil(5000) { rule.onAllNodesWithText("inbox row test").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun chatShowsMessages() {
+        kotlinx.coroutines.runBlocking {
+            Hub.db.dao().addLocal(com.yatesv.contacthub.data.LocalMessage(convKey = "3375550109", body = "chat bubble test", date = System.currentTimeMillis(), outgoing = true, source = "sent"))
+        }
+        show { ChatScreen("3375550109") }
+        rule.waitUntil(5000) { rule.onAllNodesWithText("chat bubble test").fetchSemanticsNodes().isNotEmpty() }
+    }
+    @Test fun inboxArchived() { show { InboxScreen(InboxMode.ARCHIVED) }; rule.onNodeWithText("Archived").assertExists() }
+    @Test fun inboxHidden() { show { InboxScreen(InboxMode.HIDDEN) } }
+    @Test fun chat() { show { ChatScreen("3375550101") } }
+    @Test fun groupChat() { show { ChatScreen("3375550101,3375550102") } }
+    @Test fun rcsOnlyChat() { show { ChatScreen("g:Friends") } }
+    @Test fun contact() { show { ContactScreen("3375550101") }; rule.onNodeWithText("Socials").assertExists() }
+    @Test fun contacts() { show { ContactsScreen() }; rule.onNodeWithText("Contacts").assertExists() }
+    @Test fun dialer() { show { DialerScreen() }; rule.onNodeWithText("Keypad").assertExists() }
+    @Test fun dialerTabs() {
+        show { DialerScreen() }
+        rule.onNodeWithText("Recents").performClick(); rule.waitForIdle()
+        rule.onNodeWithText("Favorites").performClick(); rule.waitForIdle()
+    }
+    @Test fun newChat() { show { NewChatScreen() } }
+    @Test fun search() { show { SearchScreen() } }
+    @Test fun starred() { show { StarredScreen() } }
+    @Test fun scheduled() { show { ScheduledScreen() } }
+    @Test fun shareSocial() { show { ShareSocialScreen(Social.INSTAGRAM, "someone") } }
+    @Test fun settingsHome() { show { SettingsHome() }; rule.onNodeWithText("Look & feel").assertExists() }
+
+    @Test fun everySettingsPage() {
+        val pages = listOf("setup", "look", "motion", "messaging", "notifications", "privacy", "life360", "backup",
+            "privacydata", "developer", "about", "licenses")
+        var page by mutableStateHolder("setup")
+        rule.setContent { HubTheme { SettingsPage(page.value) } }
+        pages.forEach { p -> rule.runOnIdle { page.value = p }; rule.waitForIdle() }
+    }
+
+    @Test fun setupWizardWalkthrough() {
+        show { SetupWizard(first = true) }
+        rule.onNodeWithText("Welcome to Contact Hub").assertExists()
+        repeat(6) {
+            val next = rule.onAllNodesWithText("Next").fetchSemanticsNodes().isNotEmpty()
+            if (next) rule.onNodeWithText("Next").performClick()
+            else if (rule.onAllNodesWithText("Do this later").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithText("Do this later").performClick()
+            rule.waitForIdle()
+        }
+    }
+
+    @Test fun setupWizardContactHubMode() {
+        show { SetupWizard(first = true) }
+        rule.onNodeWithText("Contact Hub mode").performClick()
+        rule.onNodeWithText("Next").performClick(); rule.waitForIdle()
+    }
+}
+
+/** Tiny holder so the test can switch pages. */
+private class Holder<T>(init: T) { val state = androidx.compose.runtime.mutableStateOf(init); var value: T get() = state.value; set(v) { state.value = v } }
+private fun <T> mutableStateHolder(init: T) = Holder(init)
+private operator fun <T> Holder<T>.getValue(thisRef: Any?, p: kotlin.reflect.KProperty<*>): Holder<T> = this
+private operator fun <T> Holder<T>.setValue(thisRef: Any?, p: kotlin.reflect.KProperty<*>, v: Holder<T>) {}

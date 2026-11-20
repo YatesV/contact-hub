@@ -5,25 +5,33 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.yatesv.contacthub.Hub
+import com.yatesv.contacthub.data.HubLog
 import com.yatesv.contacthub.ui.MainActivity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
-data class DriveResult(val clicked: Boolean, val chatType: String = "")
+/**
+ * What happened when we drove the Messages app.
+ * [clicked] = definitely sent. [why] = short reason when it didn't, shown to the user.
+ */
+data class DriveResult(val clicked: Boolean, val chatType: String = "", val why: String = "", val uncertain: Boolean = false)
 
 /**
  * Taps Send (or a reaction) inside Google/Samsung Messages for you, so messages go out over RCS
  * exactly as if you'd used that app. It only looks at those two apps.
  *
- * This depends on how those apps' screens are built, so a Messages update can break it.
- * When it can't find the Send button it reports "not sent" and nothing is sent twice.
+ * It checks the text box actually emptied after tapping Send, so it knows for sure whether the
+ * message went. If it didn't, it clears the text box (so nothing gets sent later by accident)
+ * and reports failure; the caller then falls back to SMS.
  */
 class MessagesAccessibility : AccessibilityService() {
 
@@ -32,15 +40,23 @@ class MessagesAccessibility : AccessibilityService() {
     override fun onInterrupt() {}
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
+    /** Every window of the Messages app (a dialog can sit on top of the chat). */
+    private fun pkgRoots(pkg: String): List<AccessibilityNodeInfo> =
+        runCatching { windows.mapNotNull { it.root }.filter { it.packageName == pkg } }.getOrDefault(emptyList())
+
+    /** The chat's text box, from whichever window has it. Null if no window has one (e.g. a popup replaced the chat). */
+    private fun chatInput(pkg: String): AccessibilityNodeInfo? =
+        pkgRoots(pkg).ifEmpty { listOfNotNull(root(pkg)) }.firstNotNullOfOrNull { findInput(all(it)) }
+
     private fun root(pkg: String): AccessibilityNodeInfo? {
-        rootInActiveWindow?.takeIf { it.packageName == pkg }?.let { return it }
-        return windows.mapNotNull { it.root }.firstOrNull { it.packageName == pkg }
+        runCatching { rootInActiveWindow?.takeIf { it.packageName == pkg }?.let { return it } }
+        return runCatching { windows.mapNotNull { it.root }.firstOrNull { it.packageName == pkg } }.getOrNull()
     }
 
-    private fun all(node: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo> = ArrayList()): List<AccessibilityNodeInfo> {
-        if (node == null) return out
+    private fun all(node: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo> = ArrayList(), depth: Int = 0): List<AccessibilityNodeInfo> {
+        if (node == null || depth > 40 || out.size > 3000) return out
         out += node
-        for (i in 0 until node.childCount) all(node.getChild(i), out)
+        for (i in 0 until node.childCount) runCatching { all(node.getChild(i), out, depth + 1) }
         return out
     }
 
@@ -62,27 +78,55 @@ class MessagesAccessibility : AccessibilityService() {
         "com.samsung.android.messaging:id/send_button",
     )
 
-    private fun findSend(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        for (id in sendIds) root.findAccessibilityNodeInfosByViewId(id).firstOrNull()?.let { return it }
-        return all(root).firstOrNull { n ->
-            val d = n.contentDescription?.toString()?.lowercase().orEmpty()
-            d.startsWith("send") && !d.contains("sticker") && !d.contains("gif") && !d.contains("emoji")
+    private fun label(n: AccessibilityNodeInfo) =
+        (n.contentDescription?.toString() ?: n.text?.toString() ?: "").trim().lowercase()
+
+    private fun findSend(root: AccessibilityNodeInfo, nodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
+        for (id in sendIds) runCatching { root.findAccessibilityNodeInfosByViewId(id) }.getOrNull()?.firstOrNull()?.let { return it }
+        val candidates = nodes.filter { n ->
+            if (n.isEditable) return@filter false
+            val l = label(n)
+            val id = n.viewIdResourceName?.lowercase().orEmpty()
+            val byLabel = l.startsWith("send") && listOf("sticker", "gif", "emoji", "photo", "location", "money", "file").none { it in l }
+            val byId = id.substringAfterLast('/').let { it.contains("send") && !it.contains("sticker") }
+            byLabel || byId
         }
+        return candidates.firstOrNull { it.isVisibleToUser && (clickable(it)?.isEnabled ?: it.isEnabled) } ?: candidates.firstOrNull()
     }
 
-    /** "rcs" / "sms" from the Send button's label ("Send RCS message", "Send end-to-end encrypted message", "Send SMS"). */
-    private fun chatType(send: AccessibilityNodeInfo?): String {
-        val d = send?.contentDescription?.toString()?.lowercase().orEmpty()
+    private fun findInput(nodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? =
+        nodes.firstOrNull { it.isEditable && it.isVisibleToUser } ?: nodes.firstOrNull { it.className?.toString()?.contains("EditText") == true }
+
+    /** The real text in the box (not the grey hint). */
+    private fun inputText(n: AccessibilityNodeInfo?): String {
+        if (n == null) return ""
+        val t = n.text?.toString().orEmpty()
+        return if (n.isShowingHintText || t == n.hintText?.toString()) "" else t
+    }
+
+    private fun norm(s: String) = s.replace(Regex("\\s+"), " ").trim()
+
+    /** "rcs" / "sms" from the Send button label or the text box hint ("RCS message", "Text message"). */
+    private fun chatType(send: AccessibilityNodeInfo?, input: AccessibilityNodeInfo?): String {
+        val labels = listOfNotNull(send?.contentDescription?.toString(), input?.hintText?.toString(),
+            if (input?.isShowingHintText == true) input.text?.toString() else null).joinToString(" ").lowercase()
         return when {
-            "rcs" in d || "encrypted" in d || "chat" in d -> "rcs"
-            "sms" in d || "mms" in d || "text" in d -> "sms"
+            "rcs" in labels || "encrypted" in labels || "chat message" in labels -> "rcs"
+            "sms" in labels || "mms" in labels || "text message" in labels -> "sms"
             else -> ""
         }
     }
 
-    private fun backToHub() {
-        startActivity(Intent(this, MainActivity::class.java).addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+    private fun setText(n: AccessibilityNodeInfo, text: String) =
+        n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        })
+
+    private fun backToHub(pkg: String) {
+        runCatching {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+        }.onFailure { if (root(pkg) != null) performGlobalAction(GLOBAL_ACTION_BACK) }
     }
 
     private fun openChat(pkg: String, addresses: List<String>, body: String?, media: List<Uri>) {
@@ -100,79 +144,133 @@ class MessagesAccessibility : AccessibilityService() {
             }
         }
         intent.setPackage(pkg)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
         startActivity(intent)
     }
 
     private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>): DriveResult {
-        openChat(pkg, addresses, body, media)
-        var clicked = false
-        var type = ""
-        withTimeoutOrNull(9000) {
-            while (true) {
-                delay(250)
+        val want = norm(body)
+        try {
+            openChat(pkg, addresses, body, media)
+            val start = System.currentTimeMillis()
+            var typedOurselves = false
+            var type = ""
+            // 1. Wait for the chat to open with our text in the box, and for Send to be tappable
+            var send: AccessibilityNodeInfo? = null
+            while (System.currentTimeMillis() - start < 9000) {
+                delay(200)
                 val r = root(pkg) ?: continue
-                // Make sure our text is actually in the box before tapping Send
-                if (body.isNotEmpty() && media.isEmpty()) {
-                    val hasText = all(r).any { it.isEditable && it.text?.toString()?.trim() == body }
-                    if (!hasText) continue
+                val nodes = all(r)
+                val input = findInput(nodes)
+                if (media.isEmpty() && want.isNotEmpty()) {
+                    val now = norm(inputText(input))
+                    if (input != null && now != want) {
+                        // Some versions ignore the pre-filled text; after a moment, type it in ourselves
+                        if (!typedOurselves && System.currentTimeMillis() - start > 2000) { setText(input, body); typedOurselves = true }
+                        continue
+                    }
                 }
-                val send = findSend(r) ?: continue
-                val target = clickable(send) ?: send
+                val s = findSend(r, nodes) ?: continue
+                val target = clickable(s) ?: s
                 if (!target.isEnabled) continue
-                type = chatType(send)
-                clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                type = chatType(s, input)
+                send = target
                 break
             }
+            if (send == null) {
+                root(pkg)?.let { r ->
+                    val nodes = all(r)
+                    val input = findInput(nodes)
+                    HubLog.w("RcsSender", "no Send button. window=${r.packageName} nodes=${nodes.size} input=${input != null} " +
+                        "inputLen=${inputText(input).length} wantLen=${want.length} hasHint=${!input?.hintText.isNullOrEmpty()} " +
+                        "ids=${nodes.mapNotNull { n -> n.viewIdResourceName?.substringAfterLast('/') }.distinct().take(30)} " +
+                        "buttons=${nodes.filter { it.isClickable }.mapNotNull { it.className?.toString()?.substringAfterLast('.') }.groupingBy { it }.eachCount()}")
+                } ?: HubLog.w("RcsSender", "Messages window never appeared (pkg=$pkg)")
+                clearDraft(pkg)
+                return DriveResult(false, type, "couldn't find the Send button")
+            }
+            // 2. Tap Send once, then make sure the chat's text box is there AND empty. That's the only
+            //    thing we count as "sent". Never tap twice, and never fall back to SMS after tapping
+            //    (Messages might still send it a moment later, and it would go out twice).
+            HubLog.d("RcsSender", "tapping Send: id=${send.viewIdResourceName} class=${send.className} type=$type typedOurselves=$typedOurselves")
+            send.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            val t0 = System.currentTimeMillis()
+            while (System.currentTimeMillis() - t0 < 6000) {
+                delay(200)
+                val input = chatInput(pkg) ?: continue          // popup on top (SIM picker, "send as MMS?"): keep waiting
+                val left = norm(inputText(input))
+                val cleared = if (media.isEmpty()) left != want && left.isEmpty() else left.isEmpty() && System.currentTimeMillis() - t0 > 1500
+                if (cleared) { HubLog.d("RcsSender", "sent OK ($type)"); return DriveResult(true, type) }
+            }
+            HubLog.w("RcsSender", "tapped Send but couldn't confirm it went (box not cleared or covered by a popup)")
+            return DriveResult(false, type, "couldn't confirm it sent, check Google Messages", uncertain = true)
+        } finally {
+            withContext(NonCancellable) { delay(350); backToHub(pkg) }
         }
-        delay(500)
-        backToHub()
-        return DriveResult(clicked, type)
+    }
+
+    /** Empties the Messages text box so a failed message doesn't get sent later by accident. */
+    private fun clearDraft(pkg: String) {
+        runCatching { root(pkg)?.let { r -> findInput(all(r))?.let { setText(it, "") } } }
     }
 
     private val emojiNames = mapOf(
         "❤️" to listOf("heart", "love"), "😂" to listOf("laugh", "tears of joy", "haha"),
         "👍" to listOf("thumbs up", "like"), "👎" to listOf("thumbs down", "dislike"),
-        "😮" to listOf("surprised", "wow", "open mouth"), "😢" to listOf("crying", "sad", "tear"),
+        "😮" to listOf("surprised", "wow", "open mouth"), "😢" to listOf("crying face", "sad"),
         "😡" to listOf("angry", "pouting"), "‼️" to listOf("exclamation", "emphasize"), "❓" to listOf("question"),
     )
 
-    private suspend fun doReact(pkg: String, addresses: List<String>, body: String, emoji: String): DriveResult {
-        openChat(pkg, addresses, null, emptyList())
-        var result = DriveResult(false)
-        withTimeoutOrNull(9000) {
+    private suspend fun doReact(pkg: String, addresses: List<String>, body: String, emoji: String, knownType: String): DriveResult {
+        val want = norm(body)
+        try {
+            openChat(pkg, addresses, null, emptyList())
+            val start = System.currentTimeMillis()
+            var type = ""
             var bubble: AccessibilityNodeInfo? = null
-            while (bubble == null) {
-                delay(300)
-                val r = root(pkg) ?: continue
-                val send = findSend(r)
-                val type = chatType(send)
-                // Only react on RCS. On SMS the Messages app would send it as text ("Liked ..."), which looks fake.
-                if (type == "sms") { result = DriveResult(false, "sms"); return@withTimeoutOrNull }
-                if (type.isEmpty()) continue
-                result = DriveResult(false, type)
-                bubble = all(r).lastOrNull { n ->
-                    !n.isEditable && (n.text?.toString()?.trim() == body.trim() || n.contentDescription?.toString()?.contains(body.trim()) == true)
-                }
-            }
-            val target = clickable(bubble!!) ?: bubble!!
-            target.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            while (true) {
+            while (System.currentTimeMillis() - start < 7000) {
                 delay(250)
                 val r = root(pkg) ?: continue
-                val names = emojiNames[emoji].orEmpty()
-                val chip = all(r).firstOrNull { n ->
-                    val t = n.text?.toString().orEmpty()
-                    val d = n.contentDescription?.toString()?.lowercase().orEmpty()
-                    t == emoji || d == emoji || names.any { d.contains(it) }
-                } ?: continue
-                result = result.copy(clicked = (clickable(chip) ?: chip).performAction(AccessibilityNodeInfo.ACTION_CLICK))
-                break
+                val nodes = all(r)
+                val input = findInput(nodes) ?: continue
+                type = chatType(findSend(r, nodes), input).ifEmpty { knownType }
+                // Only react on RCS. On SMS the Messages app sends it as a "Liked …" text, which looks fake.
+                if (type == "sms") return DriveResult(false, "sms", "this chat is on SMS right now")
+                if (type.isEmpty() && System.currentTimeMillis() - start < 3000) continue
+                if (type.isEmpty()) return DriveResult(false, "", "couldn't tell if this chat is on RCS")
+                bubble = nodes.lastOrNull { n ->
+                    if (n.isEditable) return@lastOrNull false
+                    val t = norm(n.text?.toString().orEmpty())
+                    val d = norm(n.contentDescription?.toString().orEmpty())
+                    t == want || (want.length >= 6 && (t.contains(want) || d.contains(want)))
+                }
+                if (bubble != null) break
             }
+            HubLog.d("RcsReact", "chat type=$type bubbleFound=${bubble != null} emoji=$emoji")
+            val b = bubble ?: return DriveResult(false, type, "couldn't find that message on screen")
+            // Remember what was on screen before the long-press, so we only look at the reaction menu that appears
+            fun sig(n: AccessibilityNodeInfo) = "${n.className}|${n.viewIdResourceName}|${n.text}|${n.contentDescription}"
+            val before = pkgRoots(pkg).flatMap { all(it) }.map(::sig).toHashSet()
+            val longTarget = generateSequence(b) { it.parent }.take(6).firstOrNull { it.isLongClickable } ?: clickable(b) ?: b
+            longTarget.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            val names = emojiNames[emoji].orEmpty()
+            val t0 = System.currentTimeMillis()
+            while (System.currentTimeMillis() - t0 < 3000) {
+                delay(200)
+                val fresh = pkgRoots(pkg).flatMap { all(it) }.filter { sig(it) !in before }
+                if (fresh.isEmpty()) continue
+                fun label(n: AccessibilityNodeInfo) = n.text?.toString().orEmpty() to n.contentDescription?.toString()?.lowercase().orEmpty()
+                val chip = fresh.firstOrNull { n -> val (t, d) = label(n); t == emoji || d == emoji }
+                    ?: fresh.firstOrNull { n -> val (_, d) = label(n); d.length < 40 && names.any { d.contains(it) } } ?: continue
+                val ok = (clickable(chip) ?: chip).performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                return DriveResult(ok, type, if (ok) "" else "couldn't tap the reaction")
+            }
+            HubLog.w("RcsReact", "reaction chip not found. ids=${root(pkg)?.let { r -> all(r).mapNotNull { it.viewIdResourceName?.substringAfterLast('/') }.distinct().take(30) }}")
+            performGlobalAction(GLOBAL_ACTION_BACK) // close the menu we opened
+            return DriveResult(false, type, "that reaction isn't in Messages' quick reactions")
+        } finally {
+            withContext(NonCancellable) { delay(350); backToHub(pkg) }
         }
-        delay(400)
-        backToHub()
-        return result
     }
 
     companion object {
@@ -184,19 +282,24 @@ class MessagesAccessibility : AccessibilityService() {
         fun enabledInSettings(ctx: Context): Boolean {
             val flat = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
             val me = ComponentName(ctx, MessagesAccessibility::class.java).flattenToString()
-            return flat.split(':').any { it.equals(me, ignoreCase = true) }
+            val short = ComponentName(ctx, MessagesAccessibility::class.java).flattenToShortString()
+            return flat.split(':').any { it.equals(me, ignoreCase = true) || it.equals(short, ignoreCase = true) }
         }
 
         suspend fun sendThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, media: List<Uri> = emptyList()): DriveResult =
             lock.withLock {
-                val svc = instance ?: return DriveResult(false)
-                withContext(Dispatchers.Main) { runCatching { svc.doSend(pkg, addresses, body, media) }.getOrDefault(DriveResult(false)) }
+                val svc = instance ?: return DriveResult(false, why = "Accessibility service is off")
+                withContext(Dispatchers.Main) {
+                    runCatching { svc.doSend(pkg, addresses, body, media) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
+                }
             }
 
-        suspend fun reactThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, emoji: String): DriveResult =
+        suspend fun reactThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, emoji: String, convKey: String): DriveResult =
             lock.withLock {
-                val svc = instance ?: return DriveResult(false)
-                withContext(Dispatchers.Main) { runCatching { svc.doReact(pkg, addresses, body, emoji) }.getOrDefault(DriveResult(false)) }
+                val svc = instance ?: return DriveResult(false, why = "Accessibility service is off")
+                withContext(Dispatchers.Main) {
+                    runCatching { svc.doReact(pkg, addresses, body, emoji, Hub.rcsState(convKey)) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
+                }
             }
     }
 }

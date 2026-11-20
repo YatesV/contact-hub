@@ -32,23 +32,27 @@ data class CallUi(
 /** Keeps track of the active call for the call screen. */
 object CallManager {
     val ui = MutableStateFlow<CallUi?>(null)
-    private var call: Call? = null
+    /** All calls (call waiting can mean two). The screen shows [call]: the ringing one, else the active one. */
+    private val calls = mutableListOf<Call>()
+    private val call: Call? get() =
+        calls.firstOrNull { it.state == Call.STATE_RINGING } ?: calls.firstOrNull { it.state == Call.STATE_ACTIVE } ?: calls.lastOrNull()
     internal var service: CallService? = null
 
     private val callback = object : Call.Callback() {
-        override fun onStateChanged(c: Call, state: Int) { publish(c) }
+        override fun onStateChanged(c: Call, state: Int) { call?.let { publish(it) } }
     }
 
     fun added(c: Call) {
-        call?.unregisterCallback(callback)
-        call = c
+        calls += c
         c.registerCallback(callback)
-        publish(c)
+        call?.let { publish(it) }
     }
 
     fun removed(c: Call) {
         c.unregisterCallback(callback)
-        if (call == c) { call = null; ui.value = null }
+        calls -= c
+        val next = call
+        if (next == null) { ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) } } else publish(next)
     }
 
     private fun publish(c: Call) {
@@ -66,7 +70,9 @@ object CallManager {
             outgoing = d.callDirection == Call.Details.DIRECTION_OUTGOING,
         )
         service?.let { svc -> if (st == Call.STATE_RINGING) showRinging(svc, number) else NotificationManagerCompat.from(svc).cancel(NOTIF_ID) }
-        if (st == Call.STATE_DISCONNECTED) { ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) } }
+        if (st == Call.STATE_DISCONNECTED && calls.none { it.state != Call.STATE_DISCONNECTED }) {
+            ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) }
+        }
     }
 
     fun answer() = call?.answer(VideoProfile.STATE_AUDIO_ONLY)
@@ -100,11 +106,17 @@ object CallManager {
         runCatching { NotificationManagerCompat.from(ctx).notify(NOTIF_ID, n) }
     }
 
-    fun place(ctx: Context, number: String) {
-        val tm = ctx.getSystemService(TelecomManager::class.java)
-        runCatching { tm.placeCall(Uri.fromParts("tel", number, null), Bundle()) }.onFailure {
-            ctx.startActivity(Intent(Intent.ACTION_CALL, Uri.fromParts("tel", number, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    fun place(ctx: Context, number: String, video: Boolean = false) {
+        val uri = Uri.fromParts("tel", number, null)
+        val canCall = ctx.checkSelfPermission(android.Manifest.permission.CALL_PHONE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (canCall) {
+            val extras = Bundle()
+            if (video) extras.putInt(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, VideoProfile.STATE_BIDIRECTIONAL)
+            val ok = runCatching { ctx.getSystemService(TelecomManager::class.java).placeCall(uri, extras); true }.getOrDefault(false)
+            if (ok) return
         }
+        // No permission yet: open the dialer with the number filled in
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 }
 

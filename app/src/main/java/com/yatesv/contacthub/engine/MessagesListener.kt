@@ -5,6 +5,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import com.yatesv.contacthub.Hub
+import com.yatesv.contacthub.data.HubLog
 import com.yatesv.contacthub.data.LocalMessage
 import com.yatesv.contacthub.data.Phone
 import com.yatesv.contacthub.data.Reaction
@@ -40,7 +41,9 @@ class MessagesListener : NotificationListenerService() {
         val key = convKeyFor(title, msgs.map { it.person }, isGroup)
         if (key.isEmpty()) return
 
-        n.replyHandle(pkg, title)?.let { Hub.replies[key] = it }
+        val handle = n.replyHandle(pkg, title)
+        handle?.let { Hub.replies[key] = it }
+        HubLog.d("Listener", "notif from $pkg group=$isGroup msgs=${msgs.size} keyType=${key.substringBefore(':', "num")} replyBtn=${handle != null}")
 
         val lastSeen = prefs.getLong("seen:$key", 0)
         val newOnes = msgs.filter { it.timestamp > lastSeen }
@@ -73,18 +76,15 @@ class MessagesListener : NotificationListenerService() {
                 val last = prefs.getLong("auto:$key", 0)
                 if (System.currentTimeMillis() - last > 15 * 60_000) {
                     prefs.edit().putLong("auto:$key", System.currentTimeMillis()).apply()
-                    Sender.send(this@MessagesListener, key, s.autoReplyText)
+                    Sender.send(this@MessagesListener, key, s.autoReplyText, allowDriving = false)
                 }
             }
-
-            // Retry reactions that were waiting for RCS
-            Sender.retryPendingReactions(this@MessagesListener)
         }
 
         if (s.handleNotifications && incoming.isNotEmpty()) {
             runCatching { cancelNotification(sbn.key) }
-            if (Hub.openConv != key) {
-                Notifier.showMessage(this, key, title, isGroup,
+            if (Hub.openConv != key) Hub.scope.launch {
+                Notifier.showMessage(this@MessagesListener, key, title, isGroup,
                     msgs.takeLast(6).map { (it.person?.name?.toString() ?: "You") to (it.text?.toString().orEmpty()) }
                         .filter { !Sender.isReactionText(it.second) },
                     mention = isGroup && s.myName.isNotBlank() && incoming.any { it.text?.toString()?.contains(s.myName, ignoreCase = true) == true })

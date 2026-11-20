@@ -168,14 +168,15 @@ fun ContactScreen(number: String) {
     var editSocials by remember { mutableStateOf(false) }
     var editNotes by remember { mutableStateOf(false) }
     var linkL360 by remember { mutableStateOf(false) }
-    var blocked by remember { mutableStateOf(Hub.contacts.isBlocked(number)) }
+    var blocked by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(number) {
+        blocked = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Hub.contacts.isBlocked(number) }
         extra = dao.extra(key) ?: ContactExtra(key)
         birthday = contact?.let { Hub.contacts.birthday(it.id) }
         calls = Hub.contacts.calls(number)
-        val thread = Hub.sms.threadFor(listOf(number))
+        val thread = Hub.sms.threadIdFor(Phone.convKey(listOf(number)))
         media = Hub.sms.media(thread)
         val (count, days) = Hub.sms.statsFor(thread)
         val tz = java.util.TimeZone.getDefault()
@@ -218,13 +219,7 @@ fun ContactScreen(number: String) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 QuickAction(Icons.AutoMirrored.Filled.Chat, "Text") { Nav.go(Screen.Chat(Phone.convKey(listOf(number)))) }
                 QuickAction(Icons.Default.Call, "Call") { CallManager.place(ctx, number) }
-                QuickAction(Icons.Default.Videocam, "Video") {
-                    val tm = ctx.getSystemService(TelecomManager::class.java)
-                    runCatching {
-                        tm.placeCall(Uri.fromParts("tel", number, null),
-                            android.os.Bundle().apply { putInt(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, VideoProfile.STATE_BIDIRECTIONAL) })
-                    }
-                }
+                QuickAction(Icons.Default.Videocam, "Video") { CallManager.place(ctx, number, video = true) }
                 if (member?.lat != null) QuickAction(Icons.Default.Directions, "Directions") {
                     ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${member.lat},${member.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
@@ -234,11 +229,17 @@ fun ContactScreen(number: String) {
             SectionTitle("Socials")
             HubCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    SocialButton(Social.INSTAGRAM, extra.instagram, "📸") { editSocials = true }
-                    SocialButton(Social.SNAPCHAT, extra.snapchat, "👻") { editSocials = true }
-                    SocialButton(Social.TIKTOK, extra.tiktok, "🎵") { editSocials = true }
+                    SocialButton(Social.INSTAGRAM, extra.instagram) { Nav.go(Screen.SocialSearch(number, Social.INSTAGRAM)) }
+                    SocialButton(Social.SNAPCHAT, extra.snapchat) { Nav.go(Screen.SocialSearch(number, Social.SNAPCHAT)) }
+                    SocialButton(Social.TIKTOK, extra.tiktok) { Nav.go(Screen.SocialSearch(number, Social.TIKTOK)) }
                 }
-                TextButton({ editSocials = true }, Modifier.align(Alignment.End)) { Text("Edit") }
+                if (extra.instagram.isBlank() && extra.snapchat.isBlank() && extra.tiktok.isBlank())
+                    Text("Tap an app to search for $name and link their profile.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                Row(Modifier.align(Alignment.End)) {
+                    TextButton({ Nav.go(Screen.SocialSearch(number, Social.INSTAGRAM)) }) { Text("Search") }
+                    TextButton({ editSocials = true }) { Text("Type or paste") }
+                }
             }
 
             // Life360
@@ -336,20 +337,20 @@ private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SocialButton(s: Social, stored: String, emoji: String, onAdd: () -> Unit) {
+private fun SocialButton(s: Social, stored: String, onAdd: () -> Unit) {
     val ctx = LocalContext.current
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable {
         if (stored.isBlank()) onAdd()
         else {
             val uri = Uri.parse(Socials.profileUrl(s, stored))
-            val app = Intent(Intent.ACTION_VIEW, uri).setPackage(s.pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val app = Intent(Intent.ACTION_VIEW, uri).setPackage(s.installedPackage(ctx) ?: s.pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { ctx.startActivity(app) }.onFailure {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }
     }.padding(10.dp)) {
-        Text(emoji, style = MaterialTheme.typography.headlineMedium)
-        Text(s.label, style = MaterialTheme.typography.labelLarge)
+        SocialIcon(s, 46.dp)
+        Text(s.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
         Text(if (stored.isBlank()) "Add" else if (stored.startsWith("http")) "Link" else "@$stored",
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
     }
@@ -358,6 +359,9 @@ private fun SocialButton(s: Social, stored: String, emoji: String, onAdd: () -> 
 @Composable
 private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, onOpen: () -> Unit, onRefresh: () -> Unit, onLink: () -> Unit, onSetup: () -> Unit) {
     if (m?.lat != null && m.lng != null) {
+        val mapRef = remember { arrayOfNulls<MapView>(1) }
+        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { mapRef[0]?.onDetach() } }
+        Box {
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
@@ -365,6 +369,7 @@ private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, 
                     setMultiTouchControls(true)
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     controller.setZoom(15.5)
+                    mapRef[0] = this
                 }
             },
             update = { map ->
@@ -376,6 +381,9 @@ private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, 
             },
             modifier = Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(12.dp)),
         )
+        Text("© OpenStreetMap contributors", style = MaterialTheme.typography.labelSmall, color = androidx.compose.ui.graphics.Color.Black,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f)).padding(horizontal = 4.dp))
+        }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.primary)

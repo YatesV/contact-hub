@@ -59,8 +59,25 @@ data class Settings(
     val backupDaily: Boolean = true,
     val lastBackup: Long = 0,
 
+    // Motion & feel
+    val motion: String = "ios",             // ios, bouncy, smooth, snappy, custom, off
+    val springDamping: Float = 0.86f,       // used when motion = custom
+    val springStiffness: Float = 380f,
+    val transition: String = "slide",       // slide, fade, zoom
+    val menuStyle: String = "ios",          // ios, sheet
+    val haptics: Boolean = true,
+    val screenEffects: Boolean = false,
+    val sendSound: Boolean = false,
+    val animatedReactions: Boolean = false,
+
+    // Accounts & updates
+    val driveUri: String = "",
+    val autoUpdate: Boolean = true,
+    val lastUpdateCheck: Long = 0,
+
     // Setup
     val onboarded: Boolean = false,
+    val setupVersion: Int = 0,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("preset", preset); put("darkMode", darkMode); put("dynamicColor", dynamicColor); put("accent", accent)
@@ -75,6 +92,10 @@ data class Settings(
         put("appLock", appLock); put("useBiometric", useBiometric); put("pinHash", pinHash); put("lockAfterSec", lockAfterSec)
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
         put("l360Enabled", l360Enabled); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
+        put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
+        put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
+        put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
+        put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion)
     }
 
     companion object {
@@ -103,6 +124,13 @@ data class Settings(
                 l360RefreshMin = j.optInt("l360RefreshMin", 0), l360Enabled = j.optBoolean("l360Enabled", true),
                 backupDaily = j.optBoolean("backupDaily", true), lastBackup = j.optLong("lastBackup", 0),
                 onboarded = j.optBoolean("onboarded", false),
+                motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
+                springStiffness = j.optDouble("springStiffness", 380.0).toFloat(), transition = j.optString("transition", d.transition),
+                menuStyle = j.optString("menuStyle", d.menuStyle), haptics = j.optBoolean("haptics", true),
+                screenEffects = j.optBoolean("screenEffects", false), sendSound = j.optBoolean("sendSound", false),
+                animatedReactions = j.optBoolean("animatedReactions", false), driveUri = j.optString("driveUri", ""),
+                autoUpdate = j.optBoolean("autoUpdate", true), lastUpdateCheck = j.optLong("lastUpdateCheck", 0),
+                setupVersion = j.optInt("setupVersion", 0),
             )
         }
     }
@@ -117,6 +145,7 @@ class SettingsStore(ctx: Context) {
     private fun load(): Settings =
         prefs.getString("json", null)?.let { runCatching { Settings.fromJson(JSONObject(it)) }.getOrNull() } ?: Settings()
 
+    @Synchronized
     fun update(block: (Settings) -> Settings) {
         val next = block(_flow.value)
         _flow.value = next
@@ -124,5 +153,5 @@ class SettingsStore(ctx: Context) {
     }
 
     /** Settings for backups, without secrets. */
-    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "").toJson()
+    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "", driveUri = "").toJson()
 }

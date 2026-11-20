@@ -74,7 +74,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -108,8 +112,7 @@ object ChatData0 {
     /** Puts together texts from the phone's database and RCS messages, and turns "Liked …" texts into reactions. */
     suspend fun load(key: String): ChatData {
         val dao = Hub.db.dao()
-        val addresses = Sender.addressesOf(key)
-        val thread = if (addresses.isEmpty()) 0L else Hub.sms.threadFor(addresses)
+        val thread = Hub.sms.threadIdFor(key)
         val provider = Hub.sms.messages(thread)
         val locals = dao.local(key)
         val merged = ArrayList(provider)
@@ -161,13 +164,21 @@ fun ChatScreen(key: String) {
     var meta by remember { mutableStateOf(ConvMeta(key)) }
     var group by remember { mutableStateOf<GroupInfo?>(null) }
     var extras by remember { mutableStateOf(emptyMap<String, ContactExtra>()) }
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(Nav.drafts.remove(key).orEmpty()) }
     var menu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Msg?>(null) }
     var showTimes by remember { mutableStateOf(setOf<String>()) }
     var scheduling by remember { mutableStateOf(false) }
     var groupDialog by remember { mutableStateOf(false) }
     var colorDialog by remember { mutableStateOf(false) }
+    /** Messages you just sent that haven't shown up in the real list yet (shown greyed as "Sending…"). */
+    var pending by remember { mutableStateOf(listOf<Msg>()) }
+    /** Where each bubble is on screen, for the iOS-style long-press menu. */
+    val bounds = remember { androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
+    /** Messages already on screen when the chat opened (no entrance animation for those). */
+    val seen = remember(key) { HashSet<String>() }
+    var initialDone by remember(key) { mutableStateOf(false) }
+    val view = androidx.compose.ui.platform.LocalView.current
     val starred by dao.starredFlow().collectAsState(emptyList())
     val addresses = Sender.addressesOf(key)
     val isGroup = Phone.isGroupKey(key)
@@ -184,7 +195,10 @@ fun ChatScreen(key: String) {
         extras = dao.allExtras().associateBy { it.phoneKey }
         data = runCatching { ChatData0.load(key) }.getOrDefault(ChatData(emptyList(), emptyMap(), 0))
     }
-    LaunchedEffect(key) { ActionReceiver.markRead(key); Notifier.cancel(ctx, key) }
+    LaunchedEffect(key) {
+        ActionReceiver.markRead(key); Notifier.cancel(ctx, key)
+        Sender.retryPendingFor(ctx, key)
+    }
 
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
         if (uris.isNotEmpty()) scope.launch {
@@ -208,9 +222,23 @@ fun ChatScreen(key: String) {
         val body = text.trim()
         if (body.isEmpty()) return
         text = ""
-        scope.launch {
+        Haptics.tap(view)
+        SendSound.play()
+        Effects.trigger(body)
+        val temp = Msg("p:${System.nanoTime()}", body, System.currentTimeMillis(), true, status = 1)
+        pending = pending + temp
+        // App-wide scope: leaving the chat mid-send must not cancel it
+        Hub.scope.launch {
             val r = Sender.send(ctx, key, body)
-            if (!r.ok) { text = body; snack.showSnackbar(r.error) }
+            kotlinx.coroutines.delay(400)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                pending = pending - temp
+                if (!r.ok) {
+                    if (text.isBlank()) text = body      // don't wipe anything typed since
+                    Haptics.reject(view)
+                    scope.launch { runCatching { snack.showSnackbar(r.error) } }
+                }
+            }
         }
     }
 
@@ -271,20 +299,30 @@ fun ChatScreen(key: String) {
                 AsyncImage(wp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = settings.wallpaperDim)))
             }
-            Column(Modifier.fillMaxSize().imePadding()) {
-                val msgs = data?.msgs.orEmpty()
+            val iosMenu = selected != null && settings.menuStyle == "ios"
+            Column(Modifier.fillMaxSize().imePadding().then(if (iosMenu) Modifier.blur(14.dp) else Modifier)) {
+                val real = data?.msgs.orEmpty()
+                val waiting = pending.filter { p -> real.none { it.outgoing && it.body.trim() == p.body && it.date >= p.date - 60_000 } }
+                val msgs = real + waiting
+                LaunchedEffect(data) {
+                    if (data != null && !initialDone) { seen.addAll(real.map { it.key }); initialDone = true }
+                }
                 val starredKeys = starred.map { it.msgKey }.toSet()
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
                     items(reversed.size, key = { reversed[it].key }) { i ->
                         val m = reversed[i]
+                        val isNew = initialDone && m.key !in seen
                         val older = reversed.getOrNull(i + 1)
                         val newer = reversed.getOrNull(i - 1)
                         val first = older == null || older.outgoing != m.outgoing || older.sender != m.sender || m.date - older.date > 300_000
                         val last = newer == null || newer.outgoing != m.outgoing || newer.sender != m.sender || newer.date - m.date > 300_000
-                        Column {
+                        Column(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null, placementSpec = Motion.spec())) {
                             if (older == null || !sameDay(older.date, m.date)) DateChip(m.date)
-                            Bubble(
+                            EnterAnim(isNew, m.outgoing, onShown = {
+                                seen.add(m.key)
+                                if (!m.outgoing) Effects.trigger(m.body)
+                            }) { Bubble(
                                 m, first, last, isGroup, data?.reactions?.get(m.key).orEmpty(),
                                 showTime = style.timestamps == "always" || m.key in showTimes || (style.timestamps == "groups" && last),
                                 starred = m.key in starredKeys,
@@ -292,8 +330,9 @@ fun ChatScreen(key: String) {
                                 memberColor = if (isGroup && !m.outgoing) memberColor(m.sender, extras[Phone.norm(m.sender)]?.groupColor ?: 0) else null,
                                 mention = isGroup && !m.outgoing && settings.myName.isNotBlank() && m.body.contains(settings.myName, true),
                                 onClick = { showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key },
-                                onLong = { selected = m },
-                            )
+                                onLong = { Haptics.long(view); selected = m },
+                                onBounds = { bounds[m.key] = it },
+                            ) }
                         }
                     }
                 }
@@ -332,26 +371,34 @@ fun ChatScreen(key: String) {
     }
 
     selected?.let { m ->
-        MessageActions(m, m.key in starred.map { it.msgKey }, onDismiss = { selected = null },
-            onReact = { emoji ->
-                selected = null
-                scope.launch {
-                    val existing = dao.findReaction(key, m.key, true, emoji)
-                    if (existing != null) { dao.deleteReaction(existing.id); Hub.changed(); return@launch }
-                    val id = dao.addReaction(Reaction(convKey = key, msgKey = m.key, msgBody = m.body, emoji = emoji, fromMe = true, pending = true))
-                    Hub.changed()
-                    val r = Reaction(id, key, m.key, m.body, emoji, true, true)
-                    val sent = if (Hub.rcsState(key) != "sms") Sender.trySendReaction(ctx, r) else false
-                    Hub.changed()
-                    if (!sent) snack.showSnackbar("Reaction saved. It'll send once this chat is on RCS (never as a text).")
-                }
-            },
-            onStar = { on ->
-                selected = null
-                scope.launch { if (on) dao.star(Starred(m.key, key, m.body, m.date)) else dao.unstar(m.key) }
-            },
-            onCopy = { s -> selected = null; copy(ctx, s) },
-        )
+        val isStarred = m.key in starred.map { it.msgKey }
+        val onReact: (String) -> Unit = { emoji ->
+            selected = null
+            Haptics.confirm(view)
+            scope.launch {
+                val existing = dao.findReaction(key, m.key, true, emoji)
+                if (existing != null) { dao.deleteReaction(existing.id); Hub.changed(); return@launch }
+                val id = dao.addReaction(Reaction(convKey = key, msgKey = m.key, msgBody = m.body, emoji = emoji, fromMe = true, pending = true))
+                Hub.changed()
+                val r = Reaction(id, key, m.key, m.body, emoji, true, true)
+                val waiting = if (Hub.rcsState(key) != "sms") Sender.trySendReaction(ctx, r) else "this chat is on SMS"
+                Hub.changed()
+                if (waiting != null) snack.showSnackbar("Reaction saved on your phone 🕓 ($waiting). It'll send over RCS later, never as a text.")
+            }
+        }
+        val onStar: (Boolean) -> Unit = { on ->
+            selected = null
+            scope.launch { if (on) dao.star(Starred(m.key, key, m.body, m.date)) else dao.unstar(m.key) }
+        }
+        val onCopy: (String) -> Unit = { s -> selected = null; copy(ctx, s); Haptics.tap(view) }
+        if (settings.menuStyle == "ios") {
+            IosMessageMenu(m, bounds[m.key], isStarred, if (m.outgoing && meta.bubbleColor != 0) Color(meta.bubbleColor.toLong() and 0xFFFFFFFFL)
+                else if (m.outgoing) style.sent else style.recv,
+                if (m.outgoing) style.sentText else style.recvText,
+                onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy)
+        } else {
+            MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy)
+        }
     }
 
     if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at ->
@@ -404,6 +451,7 @@ private fun isOnlyEmoji(s: String): Boolean {
 private fun Bubble(
     m: Msg, first: Boolean, last: Boolean, isGroup: Boolean, reactions: List<ShownReaction>, showTime: Boolean, starred: Boolean,
     colorOverride: Int, memberColor: Color?, mention: Boolean, onClick: () -> Unit, onLong: () -> Unit,
+    onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
 ) {
     val style = LocalChatStyle.current
     val ctx = LocalContext.current
@@ -429,6 +477,8 @@ private fun Bubble(
         Box {
             Column(
                 Modifier.widthIn(max = 300.dp)
+                    .onGloballyPositioned { onBounds(it.boundsInRoot()) }
+                    .graphicsLayer { alpha = if (m.status == 1 && m.key.startsWith("p:")) 0.6f else 1f }
                     .clip(style.bubble(m.outgoing, first, last))
                     .background(if (emojiOnly) Color.Transparent else bg)
                     .then(if (mention) Modifier.border(2.dp, MaterialTheme.colorScheme.tertiary, style.bubble(m.outgoing, first, last)) else Modifier)
@@ -454,7 +504,9 @@ private fun Bubble(
                         .border(1.dp, MaterialTheme.colorScheme.background, RoundedCornerShape(12.dp)).padding(horizontal = 6.dp, vertical = 1.dp),
                 ) {
                     reactions.groupBy { it.emoji }.forEach { (e, list) ->
-                        Text(e + (if (list.size > 1) "${list.size}" else "") + (if (list.any { it.pending }) "🕓" else ""), fontSize = 13.sp)
+                        PopIn(e + m.key) {
+                            Text(e + (if (list.size > 1) "${list.size}" else "") + (if (list.any { it.pending }) "🕓" else ""), fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -599,7 +651,8 @@ private fun GroupDialog(key: String, addresses: List<String>, group: GroupInfo?,
         },
         confirmButton = {
             TextButton({
-                scope.launch { Hub.db.dao().putGroup(GroupInfo(key, name.trim(), photo)); Hub.changed() }
+                // App-wide scope: closing the dialog would cancel its own scope before the save finished
+                Hub.scope.launch { Hub.db.dao().putGroup(GroupInfo(key, name.trim(), photo)); Hub.changed() }
                 onDone()
             }) { Text("Save") }
         },

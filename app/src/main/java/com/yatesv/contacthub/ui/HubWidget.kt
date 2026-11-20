@@ -24,10 +24,12 @@ class HubWidget : AppWidgetProvider() {
     }
 
     companion object {
-        fun refresh(ctx: Context) {
+        fun refresh(ctx: Context) { Hub.scope.launch { draw(ctx) } }
+
+        suspend fun draw(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
             val ids = mgr.getAppWidgetIds(ComponentName(ctx, HubWidget::class.java))
-            if (ids.isNotEmpty()) Hub.scope.launch { draw(ctx, mgr, ids) }
+            if (ids.isNotEmpty()) draw(ctx, mgr, ids)
         }
 
         private suspend fun draw(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {

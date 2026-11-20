@@ -15,7 +15,6 @@ import com.yatesv.contacthub.Hub
 import com.yatesv.contacthub.R
 import com.yatesv.contacthub.data.Phone
 import com.yatesv.contacthub.ui.MainActivity
-import kotlinx.coroutines.runBlocking
 
 object Notifier {
     const val CH_MESSAGES = "messages"
@@ -62,12 +61,11 @@ object Notifier {
             Intent(ctx, MainActivity::class.java).putExtra("conv", key).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-    fun showMessage(ctx: Context, key: String, title: String, isGroup: Boolean, lines: List<Pair<String, String>>, mention: Boolean = false) {
+    suspend fun showMessage(ctx: Context, key: String, title: String, isGroup: Boolean, lines: List<Pair<String, String>>, mention: Boolean = false) {
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
         val s = Hub.settings.value
-        val (meta, extra) = runBlocking {
-            Hub.db.dao().meta(key) to (if (!Phone.isGroupKey(key)) Hub.db.dao().extra(key) else null)
-        }
+        val meta = Hub.db.dao().meta(key)
+        val extra = if (!Phone.isGroupKey(key)) Hub.db.dao().extra(key) else null
         if (meta?.muted == true) return
         val hidden = meta?.hidden == true || s.hidePreviews
         val channel = channelFor(ctx, key, meta?.soundUri.orEmpty(), extra?.priority == true || mention)
@@ -93,7 +91,7 @@ object Notifier {
             }
             b.setStyle(style)
 
-            val replyIntent = PendingIntent.getBroadcast(ctx, key.hashCode(),
+            val replyIntent = PendingIntent.getBroadcast(ctx, ("r" + key).hashCode(),
                 Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.REPLY).putExtra("conv", key),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
             b.addAction(NotificationCompat.Action.Builder(R.drawable.ic_tile, "Reply", replyIntent)
@@ -101,7 +99,7 @@ object Notifier {
                 .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
                 .setAllowGeneratedReplies(false).build())
         }
-        val readIntent = PendingIntent.getBroadcast(ctx, key.hashCode() + 1,
+        val readIntent = PendingIntent.getBroadcast(ctx, ("m" + key).hashCode(),
             Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.READ).putExtra("conv", key),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         b.addAction(NotificationCompat.Action.Builder(R.drawable.ic_tile, "Mark as read", readIntent)

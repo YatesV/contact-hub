@@ -174,6 +174,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
     var menu by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<ConvRow?>(null) }
     var folderFor by remember { mutableStateOf<ConvRow?>(null) }
+    val view = androidx.compose.ui.platform.LocalView.current
 
     LaunchedEffect(version, settings.olderThan6Months) { rows = runCatching { InboxData.load() }.getOrDefault(emptyList()) }
 
@@ -221,7 +222,8 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            if (banner.isNotBlank()) Banner(banner) { Hub.banner.value = "" }
+            if (mode == InboxMode.NORMAL) UpdateBanner()
+            androidx.compose.animation.AnimatedVisibility(banner.isNotBlank()) { Banner(banner) { Hub.banner.value = "" } }
             if (l360Status.isNotBlank() && mode == InboxMode.NORMAL) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) {}
             if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected) {
                 Banner("Turn on notification access so RCS chats and replies work.", "Open", {
@@ -248,9 +250,10 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                 })
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(visible, key = { it.key }) { r ->
-                        SwipeRow(r, settings.swipeLeft, settings.swipeRight) {
-                            ConvItem(r, onClick = { Nav.go(Screen.Chat(r.key)) }, onLong = { actionsFor = r })
-                        }
+                        Box(Modifier.animateItem(fadeInSpec = Motion.spec(), fadeOutSpec = Motion.spec(), placementSpec = Motion.spec())) {
+                          SwipeRow(r, settings.swipeLeft, settings.swipeRight) {
+                            ConvItem(r, onClick = { Nav.go(Screen.Chat(r.key)) }, onLong = { Haptics.long(view); actionsFor = r })
+                        } }
                     }
                 }
             }
@@ -329,7 +332,9 @@ private fun FolderDialog(key: String?, folders: List<Folder>, onDone: () -> Unit
 @Composable
 private fun SwipeRow(r: ConvRow, left: String, right: String, content: @Composable () -> Unit) {
     val scope = rememberCoroutineScope()
+    val view = androidx.compose.ui.platform.LocalView.current
     fun run(action: String) {
+        Haptics.confirm(view)
         scope.launch {
             when (action) {
                 "archive" -> InboxData.updateMeta(r.key) { it.copy(archived = !it.archived) }
@@ -451,7 +456,7 @@ fun SearchScreen() {
     LaunchedEffect(q) {
         if (q.length < 2) { hits = emptyList(); return@LaunchedEffect }
         kotlinx.coroutines.delay(250)
-        val sms = Hub.sms.search(q).map { Triple(Phone.convKey(listOf(it.address)), it.address, it.msg) }
+        val sms = runCatching { Hub.sms.search(q) }.getOrDefault(emptyList()).map { Triple(Phone.convKey(listOf(it.address)), it.address, it.msg) }
         val local = Hub.db.dao().allLocal().filter { it.body.contains(q, true) }
             .map { Triple(it.convKey, it.convKey, com.yatesv.contacthub.data.Msg("l:${it.id}", it.body, it.date, it.outgoing)) }
         hits = (sms + local).sortedByDescending { it.third.date }

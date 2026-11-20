@@ -20,15 +20,9 @@ class ActionReceiver : BroadcastReceiver() {
             REPLY -> {
                 val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifier.KEY_REPLY)?.toString().orEmpty()
                 if (text.isBlank()) return
-                val pending = goAsync()
-                Hub.scope.launch {
-                    try {
-                        val r = Sender.send(ctx, key, text)
-                        markRead(key)
-                        if (r.ok) Notifier.cancel(ctx, key)
-                        else Notifier.status(ctx, key.hashCode(), "Not sent", r.error)
-                    } finally { pending.finish() }
-                }
+                // Sending can take several seconds, longer than a broadcast is allowed to run
+                Notifier.cancel(ctx, key)
+                ReplyWorker.enqueue(ctx, key, text)
             }
             READ -> {
                 val pending = goAsync()
@@ -40,7 +34,8 @@ class ActionReceiver : BroadcastReceiver() {
             DECLINE -> CallManager.hangup()
             AUTO_REPLY -> {
                 Hub.settings.update { it.copy(autoReplyOn = !it.autoReplyOn) }
-                HubWidget.refresh(ctx)
+                val pending = goAsync()
+                Hub.scope.launch { try { HubWidget.draw(ctx) } finally { pending.finish() } }
             }
         }
     }
@@ -58,6 +53,7 @@ class ActionReceiver : BroadcastReceiver() {
             val m = dao.meta(key) ?: ConvMeta(key)
             dao.putMeta(m.copy(lastRead = System.currentTimeMillis()))
             Hub.replies[key]?.markRead?.let { runCatching { it.send() } }
+            HubSms.markThreadRead(Hub.app, Hub.sms.threadIdFor(key))
             Hub.changed()
         }
     }

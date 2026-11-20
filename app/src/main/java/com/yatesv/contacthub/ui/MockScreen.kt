@@ -45,6 +45,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -145,7 +148,7 @@ import org.osmdroid.views.overlay.TilesOverlay
 private val END_MODES = listOf("stay" to "Stay at last point", "stop" to "Stop", "loop" to "Loop", "pingpong" to "Back & forth")
 private fun endLabel(m: String) = END_MODES.firstOrNull { it.first == m }?.second ?: m
 
-/** Settings → Developer → Mock location. Works like "Mock Locations" by dvaoru. */
+/** Settings → Developer → Mock location. Works like "Mock Locations" by dvaoru: move the map under the pin, tap Start. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MockScreen() {
@@ -166,10 +169,13 @@ fun MockScreen() {
     val ready = MockSetup.ready(ctx)
     val hasLoc = MockSetup.hasLocation(ctx)
 
+    // What's under the pin in the middle of the map
+    var center by remember { mutableStateOf<LatLng?>(null) }
+    var centerName by remember { mutableStateOf("") }
+    var knownName by remember { mutableStateOf<Pair<LatLng, String>?>(null) }
+
     // Editor
     var mode by rememberSaveable { mutableStateOf("point") }
-    var point by remember { mutableStateOf<LatLng?>(null) }
-    var pointName by remember { mutableStateOf("") }
     val waypoints = remember { mutableStateListOf<LatLng>() }
     var path by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var snapping by remember { mutableStateOf(false) }
@@ -177,8 +183,10 @@ fun MockScreen() {
     var profile by rememberSaveable { mutableStateOf("car") }
     var endMode by rememberSaveable { mutableStateOf("stay") }
     var fromReal by rememberSaveable { mutableStateOf(false) }
+    var moreOptions by rememberSaveable { mutableStateOf(false) }
     var routeName by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
+    var editWhileActive by remember { mutableStateOf(false) }
 
     // Real location (only readable while not mocking)
     var real by remember { mutableStateOf<LatLng?>(null) }
@@ -190,30 +198,41 @@ fun MockScreen() {
     var showSettings by remember { mutableStateOf(false) }
     var showPaste by remember { mutableStateOf(false) }
     var showContacts by remember { mutableStateOf(false) }
+    var showSaved by remember { mutableStateOf(false) }
     var scheduleFor by remember { mutableStateOf<MockItem?>(null) }
     var saveFor by remember { mutableStateOf<MockItem?>(null) }
 
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++ }
 
-    fun pick(p: LatLng, name: String? = null) {
-        Haptics.tap(view)
-        if (mode == "point") {
-            point = p; pointName = name ?: MockMath.fmt(p)
-            if (name == null) scope.launch { MockApi.nameOf(p)?.let { n -> if (point == p) pointName = n } }
-        } else waypoints += p
+    // Name the spot under the pin once the map stops moving
+    LaunchedEffect(center) {
+        val c = center ?: return@LaunchedEffect
+        knownName?.let { (p, n) -> if (MockMath.meters(p, c) < 25) { centerName = n; return@LaunchedEffect } }
+        centerName = ""
+        delay(700)
+        centerName = MockApi.nameOf(c) ?: MockMath.fmt(c)
     }
 
-    fun currentItem(): MockItem? = if (mode == "point") point?.let { MockItem(name = pointName.ifBlank { MockMath.fmt(it) }, type = "point", points = listOf(it)) }
-    else if (path.size >= 2) {
+    /** Moves the map so the pin is on [p]. */
+    fun goTo(p: LatLng, name: String? = null) {
+        if (name != null) knownName = p to name
+        MapCenter.go(p)
+    }
+
+    fun addStop(p: LatLng) { waypoints += p; Haptics.tap(view) }
+
+    fun currentItem(): MockItem? = if (mode == "point") center?.let {
+        MockItem(name = centerName.ifBlank { MockMath.fmt(it) }, type = "point", points = listOf(it))
+    } else if (path.size >= 2) {
         val wp = if (fromReal && realOrLast != null) listOf(realOrLast) + waypoints else waypoints.toList()
         MockItem(name = "Route to " + routeName.ifBlank { MockMath.fmt(wp.last()) }, type = "route",
             points = wp, path = path, speedMph = speed.toDouble(), endMode = endMode, profile = profile, startFromReal = fromReal)
     } else null
 
     fun start(item: MockItem) {
-        if (!MockSetup.ready(ctx)) { message = "Finish the setup steps at the top first."; Haptics.reject(view); return }
+        if (!MockSetup.ready(ctx)) { message = "Finish the 2 setup steps first."; Haptics.reject(view); return }
         runCatching { MockStore.start(ctx, item) }
-            .onSuccess { Haptics.confirm(view); message = "" }
+            .onSuccess { Haptics.confirm(view); message = ""; editWhileActive = false }
             .onFailure { message = "Couldn't start: ${it.message}"; Haptics.reject(view) }
     }
 
@@ -223,10 +242,12 @@ fun MockScreen() {
             waypoints.clear(); waypoints.addAll(if (item.startFromReal) item.points.drop(1) else item.points)
             path = item.path; speed = item.speedMph.toFloat(); endMode = item.endMode; profile = item.profile; fromReal = item.startFromReal
             routeName = item.name.removePrefix("Route to ")
-        } else { point = item.points.last(); pointName = item.name }
+            goTo(item.points.first())
+        } else goTo(item.points.last(), item.name)
+        if (st.active) editWhileActive = true
     }
 
-    // Snap the route to roads whenever the waypoints change (short wait so taps don't spam the server)
+    // Snap the route to roads whenever the stops change (short wait so taps don't spam the server)
     val routeKey = waypoints.toList() to (fromReal to profile)
     LaunchedEffect(routeKey, mode) {
         if (mode != "route") return@LaunchedEffect
@@ -240,165 +261,212 @@ fun MockScreen() {
         MockApi.nameOf(wp.last())?.let { routeName = it }
     }
 
+    val editing = !st.active || editWhileActive
+
     Scaffold(topBar = {
         TopAppBar(title = { Text("Mock location") },
             navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton({ showSettings = true }) { Icon(Icons.Default.Settings, "Mock location settings") } })
+            actions = {
+                if (favorites.isNotEmpty() || history.isNotEmpty() || schedules.isNotEmpty())
+                    IconButton({ showSaved = true }) { Icon(Icons.Default.Star, "Saved, recent and scheduled") }
+                IconButton({ showSettings = true }) { Icon(Icons.Default.Settings, "Mock location settings") }
+            })
     }) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            // ---------------- Map ----------------
-            Box(Modifier.fillMaxWidth().weight(0.46f)) {
-                MockMap(
-                    style = s.mockMapStyle, mock = st.here.takeIf { st.active }, real = realOrLast, realStale = st.active || real == null,
-                    point = point.takeIf { mode == "point" }, waypoints = if (mode == "route") waypoints.toList() else emptyList(),
-                    path = if (mode == "route") path else emptyList(), activePath = st.item?.takeIf { st.active && it.isRoute }?.path.orEmpty(),
-                    onLongPress = { pick(it) },
-                )
-                Column(Modifier.align(Alignment.TopEnd).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SmallFloatingActionButton({
-                        if (!MockApi.hasMapbox && s.mockMapStyle == "streets") { message = "Satellite needs a free Mapbox token (⚙️)."; showSettings = true }
-                        else Hub.settings.update { it.copy(mockMapStyle = if (it.mockMapStyle == "satellite") "streets" else "satellite") }
-                    }, containerColor = MaterialTheme.colorScheme.surface) { Icon(Icons.Default.Layers, "Street / satellite") }
-                    SmallFloatingActionButton({
-                        when {
-                            !hasLoc -> { message = "Allow location so the map can find you."; perms.launch(locationPerms()) }
-                            st.active -> {
-                                // Android only gives out the fake location while mocking, so use the last real one
-                                if (realOrLast != null) { MapCenter.go(realOrLast); message = "Showing your last real location from before mocking started." }
-                                else message = "Your real location isn't known yet. Stop mocking, then tap this again."
-                            }
-                            else -> {
-                                realOrLast?.let { MapCenter.go(it) } ?: run { message = "Finding your location…" }
-                                freshFix(ctx) { p -> real = p; MockStore.saveReal(p); MapCenter.go(p); if (message == "Finding your location…") message = "" }
-                            }
-                        }
-                    }, containerColor = MaterialTheme.colorScheme.surface) {
-                        Icon(Icons.Default.MyLocation, "Go to my real location")
-                    }
-                    if (st.active) SmallFloatingActionButton({ MapCenter.go(st.here) }, containerColor = MaterialTheme.colorScheme.surface) {
-                        Icon(Icons.Default.Place, "Go to mock location", tint = Color(0xFFFF453A))
-                    }
-                }
-                Text(MockApi.attribution(s.mockMapStyle), style = MaterialTheme.typography.labelSmall, color = Color.Black,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).background(Color.White.copy(alpha = 0.7f)).padding(horizontal = 4.dp))
-                if (st.active && realOrLast != null) Text(
-                    "Blue dot: real location ${MockStore.lastReal()?.second?.let { com.yatesv.contacthub.data.Geo.ago(it) } ?: ""} (before mocking)",
-                    style = MaterialTheme.typography.labelSmall, color = Color.White,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 6.dp, vertical = 2.dp))
-            }
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(pad).fillMaxSize()) {
+            val maxCard = maxHeight * 0.55f
+            Column(Modifier.fillMaxSize()) {
+            // Map fills the space above the card, so the pin in its middle is always visible
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+            MockMap(
+                style = s.mockMapStyle, mock = st.here.takeIf { st.active }, real = realOrLast, realStale = st.active || real == null,
+                waypoints = if (mode == "route" && editing) waypoints.toList() else emptyList(),
+                path = if (mode == "route" && editing) path else emptyList(), activePath = st.item?.takeIf { st.active && it.isRoute }?.path.orEmpty(),
+                onCenter = { center = it },
+                onTap = { MapCenter.go(it) },
+                onLongPress = { if (mode == "route" && editing) addStop(it) else MapCenter.go(it) },
+            )
 
-            // ---------------- Panel ----------------
-            Column(Modifier.fillMaxWidth().weight(0.54f).verticalScroll(rememberScrollState())) {
-                AnimatedVisibility(!ready, enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
-                    SetupCard(ctx)
-                }
+            // The pin: whatever is under its tip is the spot
+            if (editing) CenterPin(mode == "route", Modifier.align(Alignment.Center))
+
+            // Search across the top
+            Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(top = 8.dp)) {
+                PickBar(near = center ?: realOrLast, onPick = { p, n -> goTo(p, n) }, onPaste = { showPaste = true }, onContact = { showContacts = true })
                 if (st.error.isNotBlank()) Banner(st.error) { MockStore.set(st.copy(error = "")) }
                 if (message.isNotBlank()) Banner(message) { message = "" }
-                AnimatedVisibility(st.active, enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
-                    ActiveCard(ctx)
-                }
+            }
 
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    listOf("point" to "Single point", "route" to "Route").forEachIndexed { i, (v, label) ->
-                        SegmentedButton(mode == v, { mode = v; Haptics.tap(view) }, SegmentedButtonDefaults.itemShape(i, 2),
-                            icon = { Icon(if (v == "point") Icons.Default.Place else Icons.Default.Route, null, Modifier.size(18.dp)) }) { Text(label) }
-                    }
-                }
-
-                PickBar(near = st.here ?: realOrLast, onPick = { p, n -> pick(p, n) }, onPaste = { showPaste = true }, onContact = { showContacts = true })
-
-                AnimatedContent(mode, label = "mockMode", transitionSpec = { fadeIn(Motion.spec()) togetherWith fadeOut(Motion.spec()) }) { m ->
-                    if (m == "point") Column(Modifier.padding(horizontal = 16.dp)) {
-                        val p = point
-                        if (p == null) Hint("Long-press the map, search an address, paste coordinates, or pick a contact.")
-                        else {
-                            Text(pointName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(MockMath.fmt(p), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button({ currentItem()?.let(::start) }) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Mock here") }
-                                OutlinedButton({ saveFor = currentItem() }) { Icon(Icons.Default.StarBorder, null) }
-                                OutlinedButton({ scheduleFor = currentItem() }) { Icon(Icons.Default.Schedule, null) }
-                            }
+            // Map buttons
+            Column(Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SmallFloatingActionButton({
+                    if (!MockApi.hasMapbox && s.mockMapStyle == "streets") { message = "Satellite needs a free Mapbox token (⚙️)."; showSettings = true }
+                    else Hub.settings.update { it.copy(mockMapStyle = if (it.mockMapStyle == "satellite") "streets" else "satellite") }
+                }, containerColor = MaterialTheme.colorScheme.surface) { Icon(Icons.Default.Layers, "Street / satellite") }
+                SmallFloatingActionButton({
+                    when {
+                        !hasLoc -> { message = "Allow location so the map can find you."; perms.launch(locationPerms()) }
+                        st.active -> {
+                            if (realOrLast != null) { MapCenter.go(realOrLast); message = "Showing your last real location from before mocking started." }
+                            else message = "Your real location isn't known yet. Stop mocking, then tap this again."
                         }
-                    } else Column(Modifier.padding(horizontal = 16.dp)) {
-                        SwitchRowCompact("Start from my real location", if (realOrLast == null) "Allow location in setup first" else null, fromReal) { fromReal = it }
-                        if (waypoints.isEmpty()) Hint("Long-press the map (or search) to add stops. The route follows real roads.")
-                        waypoints.forEachIndexed { i, w ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                                    Text("${i + 1}", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelSmall)
+                        else -> {
+                            realOrLast?.let { MapCenter.go(it) } ?: run { message = "Finding your location…" }
+                            freshFix(ctx) { p -> real = p; MockStore.saveReal(p); MapCenter.go(p); if (message == "Finding your location…") message = "" }
+                        }
+                    }
+                }, containerColor = MaterialTheme.colorScheme.surface) { Icon(Icons.Default.MyLocation, "Go to my real location") }
+                if (st.active) SmallFloatingActionButton({ MapCenter.go(st.here) }, containerColor = MaterialTheme.colorScheme.surface) {
+                    Icon(Icons.Default.Place, "Go to mock location", tint = Color(0xFFFF453A))
+                }
+            }
+
+            }
+
+            // Bottom card
+            Surface(
+                Modifier.fillMaxWidth().heightIn(max = maxCard),
+                shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp), shadowElevation = 16.dp,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+            ) {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+                    Box(Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp).size(36.dp, 4.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)))
+                    Text(MockApi.attribution(s.mockMapStyle), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.End).padding(end = 14.dp))
+
+                    when {
+                        !ready -> SetupCard(ctx)
+                        else -> {
+                            AnimatedVisibility(st.active, enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
+                                Column {
+                                    ActiveCard(ctx)
+                                    if (!editWhileActive) TextButton({ editWhileActive = true }, Modifier.padding(horizontal = 8.dp)) { Text("Go somewhere else") }
                                 }
-                                Text(MockMath.fmt(w), Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.bodyMedium)
-                                IconButton({ waypoints.removeAt(i) }) { Icon(Icons.Default.Close, "Remove stop") }
+                            }
+                            AnimatedVisibility(editing, enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
+                                Column {
+                                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                                        listOf("point" to "Stay in one spot", "route" to "Drive a route").forEachIndexed { i, (v, label) ->
+                                            SegmentedButton(mode == v, { mode = v; Haptics.tap(view) }, SegmentedButtonDefaults.itemShape(i, 2),
+                                                icon = { Icon(if (v == "point") Icons.Default.Place else Icons.Default.Route, null, Modifier.size(18.dp)) }) { Text(label) }
+                                        }
+                                    }
+                                    AnimatedContent(mode, label = "mockMode", transitionSpec = { fadeIn(Motion.spec()) togetherWith fadeOut(Motion.spec()) }) { m ->
+                                        if (m == "point") PointPanel(
+                                            name = centerName, here = center,
+                                            onStart = { currentItem()?.let(::start) },
+                                            onSave = { saveFor = currentItem() },
+                                            onSchedule = { scheduleFor = currentItem() },
+                                        ) else Column(Modifier.padding(horizontal = 16.dp)) {
+                                            // Stops
+                                            if (waypoints.isEmpty()) Hint(if (fromReal) "Move the map to where you're going and tap Add stop." else "Move the map to where the route starts and tap Add stop.")
+                                            else FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                                                if (fromReal) StopChip("Me", MaterialTheme.colorScheme.tertiary) {}
+                                                waypoints.forEachIndexed { i, w -> StopChip("${i + 1}", MaterialTheme.colorScheme.primary) { goTo(w) } }
+                                            }
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                FilledTonalButton({ center?.let(::addStop) }, enabled = center != null) { Text("+ Add stop here") }
+                                                if (waypoints.isNotEmpty()) TextButton({ waypoints.removeAt(waypoints.lastIndex) }) { Text("Undo") }
+                                                if (waypoints.size > 1) TextButton({ waypoints.clear(); path = emptyList() }) { Text("Clear") }
+                                            }
+                                            // Speed presets
+                                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                                MockMath.PRESETS.forEach { (k, mph) ->
+                                                    FilterChip(speed.toDouble() == mph, {
+                                                        speed = mph.toFloat(); profile = if (k == "highway") "car" else k; Haptics.tap(view)
+                                                    }, { Text("${k.replaceFirstChar { it.uppercase() }} ${mph.toInt()}") })
+                                                }
+                                            }
+                                            // Summary
+                                            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                if (snapping) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text("Following roads…", style = MaterialTheme.typography.bodySmall) }
+                                                else if (path.size >= 2) {
+                                                    val plan = remember(path, speed) { RoutePlan(path, speed.toDouble()) }
+                                                    Text("%.1f mi · about %s at %d mph · then %s".format(MockMath.miles(plan.totalMeters), MockMath.duration(plan.totalSeconds), speed.toInt(), endLabel(endMode).lowercase()),
+                                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+                                            Button({ currentItem()?.let(::start) }, Modifier.fillMaxWidth().height(52.dp).padding(top = 4.dp), enabled = !snapping && path.size >= 2,
+                                                shape = RoundedCornerShape(16.dp)) {
+                                                Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp))
+                                                Text(when { path.size >= 2 -> "Start route"; fromReal -> "Add a stop"; else -> "Add at least 2 stops" })
+                                            }
+                                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                TextButton({ saveFor = currentItem() }, enabled = path.size >= 2) { Icon(Icons.Default.StarBorder, null, Modifier.size(18.dp)); Text(" Save") }
+                                                TextButton({ scheduleFor = currentItem() }, enabled = path.size >= 2) { Icon(Icons.Default.Schedule, null, Modifier.size(18.dp)); Text(" Schedule") }
+                                                Spacer(Modifier.weight(1f))
+                                                TextButton({ moreOptions = !moreOptions }) { Text(if (moreOptions) "Fewer options" else "More options") }
+                                            }
+                                            AnimatedVisibility(moreOptions, enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
+                                                Column {
+                                                    SwitchRowCompact("Start from my real location", if (realOrLast == null) "Allow location in ⚙️ first" else null, fromReal) { fromReal = it }
+                                                    Text("Exact speed", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
+                                                    SliderRowCompact("${speed.toInt()} mph", speed, 1f..100f) { speed = it.toInt().toFloat() }
+                                                    Text("When the route ends", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
+                                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                        END_MODES.forEach { (k, label) -> FilterChip(endMode == k, { endMode = k; Haptics.tap(view) }, { Text(label) }) }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (st.active) TextButton({ editWhileActive = false }, Modifier.padding(horizontal = 8.dp)) { Text("Cancel") }
+                                }
                             }
                         }
-                        if (waypoints.isNotEmpty()) TextButton({ waypoints.clear(); path = emptyList() }) { Text("Clear stops") }
+                    }
 
-                        Text("Speed", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 8.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MockMath.PRESETS.forEach { (k, mph) ->
-                                FilterChip(profile == k && speed.toDouble() == mph, {
-                                    speed = mph.toFloat(); profile = if (k == "highway") "car" else k; Haptics.tap(view)
-                                }, { Text("${k.replaceFirstChar { it.uppercase() }} · ${mph.toInt()}") })
+                    // Saved & recent, one tap away
+                    val quick = (favorites.map { it to true } + history.filter { h -> favorites.none { it.points == h.points && it.type == h.type } }.map { it to false }).take(12)
+                    if (quick.isNotEmpty()) {
+                        Text("Saved & recent", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp))
+                        androidx.compose.foundation.lazy.LazyRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(quick.size) { i ->
+                                val (item, fav) = quick[i]
+                                androidx.compose.material3.AssistChip({ load(item) }, { Text(item.name.removePrefix("Route to ").take(22), maxLines = 1) },
+                                    leadingIcon = { Icon(if (fav) Icons.Default.Star else if (item.isRoute) Icons.Default.Route else Icons.Default.Place, null, Modifier.size(16.dp)) })
                             }
-                        }
-                        SliderRowCompact("${speed.toInt()} mph", speed, 1f..100f) { speed = it.toInt().toFloat() }
-
-                        Text("At the end", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            END_MODES.forEach { (k, label) -> FilterChip(endMode == k, { endMode = k; Haptics.tap(view) }, { Text(label) }) }
-                        }
-
-                        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            if (snapping) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text("Following roads…", style = MaterialTheme.typography.bodySmall) }
-                            else if (path.size >= 2) {
-                                val plan = remember(path, speed) { RoutePlan(path, speed.toDouble()) }
-                                Text("%.1f mi · about %s · slows for turns".format(MockMath.miles(plan.totalMeters), MockMath.duration(plan.totalSeconds)),
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button({ currentItem()?.let(::start) }, enabled = !snapping && path.size >= 2) {
-                                Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Start route")
-                            }
-                            OutlinedButton({ saveFor = currentItem() }, enabled = path.size >= 2) { Icon(Icons.Default.StarBorder, null) }
-                            OutlinedButton({ scheduleFor = currentItem() }, enabled = path.size >= 2) { Icon(Icons.Default.Schedule, null) }
+                            item { androidx.compose.material3.AssistChip({ showSaved = true }, { Text("See all") }) }
                         }
                     }
                 }
-
-                if (schedules.isNotEmpty()) {
-                    SectionTitle("Scheduled")
-                    schedules.forEach { sc ->
-                        SettingRow(sc.item.name, "Starts ${fullTime(sc.at)}", Icons.Default.Schedule) {
-                            IconButton({ MockStore.removeSchedule(ctx, sc.id) }) { Icon(Icons.Default.Close, "Cancel schedule") }
-                        }
-                    }
-                }
-                if (favorites.isNotEmpty()) {
-                    SectionTitle("Favorites")
-                    favorites.forEach { f -> ItemRow(f, onLoad = { load(f) }, onStart = { start(f) }, onSchedule = { scheduleFor = f }, onDelete = { MockStore.deleteFavorite(f.id) }) }
-                }
-                if (history.isNotEmpty()) {
-                    SectionTitle("Recent")
-                    history.take(10).forEach { h -> ItemRow(h, onLoad = { load(h) }, onStart = { start(h) }, onSchedule = { scheduleFor = h }, onSave = { saveFor = h }) }
-                    TextButton({ MockStore.clearHistory() }, Modifier.padding(horizontal = 8.dp)) { Text("Clear recent") }
-                }
-                Spacer(Modifier.height(32.dp))
+            }
             }
         }
     }
 
     if (showSettings) MockSettingsSheet(ctx, onPerms = { perms.launch(locationPerms()) }) { showSettings = false }
-    if (showPaste) PasteDialog(onDone = { showPaste = false }) { p -> showPaste = false; pick(p) }
-    if (showContacts) ContactAddressDialog(onDone = { showContacts = false }) { p, n -> showContacts = false; pick(p, n) }
+    if (showPaste) PasteDialog(onDone = { showPaste = false }) { p -> showPaste = false; goTo(p) }
+    if (showContacts) ContactAddressDialog(onDone = { showContacts = false }) { p, n -> showContacts = false; goTo(p, n) }
+    if (showSaved) ModalBottomSheet({ showSaved = false }) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            if (schedules.isNotEmpty()) {
+                SectionTitle("Scheduled")
+                schedules.forEach { sc ->
+                    SettingRow(sc.item.name, "Starts ${fullTime(sc.at)}", Icons.Default.Schedule) {
+                        IconButton({ MockStore.removeSchedule(ctx, sc.id) }) { Icon(Icons.Default.Close, "Cancel schedule") }
+                    }
+                }
+            }
+            SectionTitle("Favorites")
+            if (favorites.isEmpty()) Hint("Tap Save on a spot or route to keep it here.")
+            favorites.forEach { f -> ItemRow(f, onLoad = { showSaved = false; load(f) }, onStart = { showSaved = false; start(f) }, onSchedule = { scheduleFor = f }, onDelete = { MockStore.deleteFavorite(f.id) }) }
+            if (history.isNotEmpty()) {
+                SectionTitle("Recent")
+                history.forEach { h -> ItemRow(h, onLoad = { showSaved = false; load(h) }, onStart = { showSaved = false; start(h) }, onSchedule = { scheduleFor = h }, onSave = { saveFor = h }) }
+                TextButton({ MockStore.clearHistory() }, Modifier.padding(horizontal = 8.dp)) { Text("Clear recent") }
+            }
+        }
+    }
     saveFor?.let { item ->
         var name by remember(item) { mutableStateOf(item.name) }
         AlertDialog(
             onDismissRequest = { saveFor = null },
             title = { Text("Save favorite") },
             text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true) },
-            confirmButton = { TextButton({ MockStore.saveFavorite(item.copy(id = java.util.UUID.randomUUID().toString(), name = name.ifBlank { item.name })); saveFor = null; Haptics.confirm(view) }) { Text("Save") } },
+            confirmButton = { TextButton({ MockStore.saveFavorite(item.copy(id = java.util.UUID.randomUUID().toString(), name = name.ifBlank { item.name })); saveFor = null; Haptics.confirm(view); message = "Saved to favorites" }) { Text("Save") } },
             dismissButton = { TextButton({ saveFor = null }) { Text("Cancel") } },
         )
     }
@@ -409,6 +477,43 @@ fun MockScreen() {
             message = if (MockSetup.canExactAlarm(ctx)) "Scheduled for ${fullTime(at)}" else
                 "Scheduled. Allow \"Alarms & reminders\" in ⚙️ so Android doesn't delay it."
         }
+    }
+}
+
+/** Single-point panel: what's under the pin and one big Start button. */
+@Composable
+private fun PointPanel(name: String, here: LatLng?, onStart: () -> Unit, onSave: () -> Unit, onSchedule: () -> Unit) {
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        Text(name.ifBlank { if (here == null) "Move the map to a spot" else "Finding address…" }, style = MaterialTheme.typography.titleMedium,
+            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+        here?.let { Text(MockMath.fmt(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        Hint("Move the map so the pin is on the spot, or search up top.")
+        Button(onStart, Modifier.fillMaxWidth().height(52.dp), enabled = here != null, shape = RoundedCornerShape(16.dp)) {
+            Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Start here")
+        }
+        Row {
+            TextButton(onSave, enabled = here != null) { Icon(Icons.Default.StarBorder, null, Modifier.size(18.dp)); Text(" Save") }
+            TextButton(onSchedule, enabled = here != null) { Icon(Icons.Default.Schedule, null, Modifier.size(18.dp)); Text(" Schedule") }
+        }
+    }
+}
+
+@Composable
+private fun StopChip(label: String, color: Color, onClick: () -> Unit) {
+    Box(Modifier.size(30.dp).clip(CircleShape).background(color).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Text(label, color = Color.White, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** Pin fixed in the middle of the map. Its tip marks the spot. */
+@Composable
+private fun CenterPin(route: Boolean, modifier: Modifier) {
+    val lift by androidx.compose.animation.core.animateFloatAsState(1f, Motion.spec(), label = "pin")
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.35f)))
+        Icon(if (route) Icons.Default.AddLocation else Icons.Default.Place, null,
+            tint = if (route) MaterialTheme.colorScheme.primary else Color(0xFFFF453A),
+            modifier = Modifier.size(46.dp).offset(y = (-21).dp).graphicsLayer { scaleX = lift; scaleY = lift })
     }
 }
 
@@ -523,16 +628,19 @@ private fun PickBar(near: LatLng?, onPick: (LatLng, String?) -> Unit, onPaste: (
             busy = false
         }
     }
-    Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(query, { query = it }, Modifier.weight(1f), placeholder = { Text("Search address or place") }, singleLine = true,
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(26.dp), shadowElevation = 6.dp, color = MaterialTheme.colorScheme.surface) {
+    Row(Modifier.padding(start = 4.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.TextField(query, { query = it }, Modifier.weight(1f), placeholder = { Text("Search a place or paste coordinates") }, singleLine = true,
+            colors = androidx.compose.material3.TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
             leadingIcon = { if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Search, null) },
             trailingIcon = { if (query.isNotEmpty()) IconButton({ query = ""; results = emptyList(); err = "" }) { Icon(Icons.Default.Close, "Clear") } },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { search() }),
-            shape = RoundedCornerShape(14.dp))
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { search() }))
         IconButton(onPaste) { Icon(Icons.Default.ContentPaste, "Paste coordinates") }
         IconButton(onContact) { Icon(Icons.Default.Person, "A contact's address") }
     }
-    if (err.isNotBlank()) Text(err, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+    if (err.isNotBlank()) Banner(err) { err = "" }
     AnimatedVisibility(results.isNotEmpty(), enter = expandVertically(Motion.spec()) + fadeIn(Motion.spec()), exit = shrinkVertically(Motion.spec()) + fadeOut(Motion.spec())) {
         SettingsGroup {
             results.forEach { r ->
@@ -784,17 +892,15 @@ private fun dot(color: Int, sizeDp: Int, ctx: Context) = GradientDrawable().appl
     setSize((sizeDp * d).toInt(), (sizeDp * d).toInt())
 }
 
-private class Ours(val o: Overlay)
-
 @Composable
 private fun MockMap(
-    style: String, mock: LatLng?, real: LatLng?, realStale: Boolean, point: LatLng?, waypoints: List<LatLng>,
-    path: List<LatLng>, activePath: List<LatLng>, onLongPress: (LatLng) -> Unit,
+    style: String, mock: LatLng?, real: LatLng?, realStale: Boolean, waypoints: List<LatLng>,
+    path: List<LatLng>, activePath: List<LatLng>, onCenter: (LatLng) -> Unit, onTap: (LatLng) -> Unit, onLongPress: (LatLng) -> Unit,
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val accent = MaterialTheme.colorScheme.primary.toArgb()
-    val pressCb = remember { arrayOf(onLongPress) }
-    pressCb[0] = onLongPress
+    val cbs = remember { arrayOf(onCenter, onTap, onLongPress) }
+    cbs[0] = onCenter; cbs[1] = onTap; cbs[2] = onLongPress
     val ours = remember { mutableListOf<Overlay>() }
     var centered by remember { mutableStateOf(false) }
     val mine = remember { arrayOfNulls<MapView>(1) }
@@ -813,9 +919,15 @@ private fun MockMap(
                 isTilesScaledToDpi = true
                 controller.setZoom(4.0); controller.setCenter(GeoPoint(39.5, -98.35))
                 overlays.add(MapEventsOverlay(object : MapEventsReceiver {
-                    override fun singleTapConfirmedHelper(p: GeoPoint?) = false
-                    override fun longPressHelper(p: GeoPoint?): Boolean { p?.let { pressCb[0](LatLng(it.latitude, it.longitude)) }; return true }
+                    override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean { p?.let { cbs[1](LatLng(it.latitude, it.longitude)) }; return true }
+                    override fun longPressHelper(p: GeoPoint?): Boolean { p?.let { cbs[2](LatLng(it.latitude, it.longitude)) }; return true }
                 }))
+                // Tell the screen what's under the pin, a moment after the map stops moving
+                addMapListener(org.osmdroid.events.DelayedMapListener(object : org.osmdroid.events.MapListener {
+                    override fun onScroll(e: org.osmdroid.events.ScrollEvent?): Boolean { report(); return false }
+                    override fun onZoom(e: org.osmdroid.events.ZoomEvent?): Boolean { report(); return false }
+                    private fun report() { val c = mapCenter; cbs[0](LatLng(c.latitude, c.longitude)) }
+                }, 250))
                 MapCenter.map = this
                 mine[0] = this
             }
@@ -838,11 +950,12 @@ private fun MockMap(
             if (activePath.size >= 2) line(activePath, android.graphics.Color.argb(110, 52, 199, 89), 6f)
             if (path.size >= 2) line(path, accent, 5f)
             waypoints.forEachIndexed { i, w -> marker(w, dot(if (i == waypoints.lastIndex) accent else android.graphics.Color.DKGRAY, 14, ctx), "Stop ${i + 1}") }
-            point?.let { marker(it, dot(accent, 20, ctx), "Picked spot") }
             real?.let { marker(it, dot(if (realStale) android.graphics.Color.argb(170, 10, 132, 255) else android.graphics.Color.rgb(10, 132, 255), 16, ctx), "Real location") }
             mock?.let { marker(it, dot(android.graphics.Color.rgb(255, 69, 58), 22, ctx), "Mock location") }
             map.overlays.addAll(ours)
-            if (!centered) (mock ?: point ?: real)?.let { centered = true; map.controller.setZoom(15.5); map.controller.setCenter(GeoPoint(it.lat, it.lng)) }
+            if (!centered) (mock ?: real)?.let {
+                centered = true; map.controller.setZoom(16.0); map.controller.setCenter(GeoPoint(it.lat, it.lng)); cbs[0](it)
+            }
             map.invalidate()
         },
         modifier = Modifier.fillMaxSize(),

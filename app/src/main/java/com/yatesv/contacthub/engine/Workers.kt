@@ -133,6 +133,9 @@ object Backup {
             } }))
             put("groups", arr(dao.allGroups().map { g -> JSONObject().apply { put("convKey", g.convKey); put("name", g.name); put("photoUri", g.photoUri) } }))
             put("sms", arr(runCatching { Hub.sms.allSmsForBackup() }.getOrDefault(emptyList()).map { JSONObject(it) }))
+            MockStore.load()
+            put("mockFavorites", org.json.JSONArray(com.yatesv.contacthub.data.MockItem.listToJson(MockStore.favorites.value)))
+            put("mockRecent", org.json.JSONArray(com.yatesv.contacthub.data.MockItem.listToJson(MockStore.history.value)))
         }
     }
 
@@ -165,7 +168,7 @@ object Backup {
         fun JSONObject.objs(k: String) = optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.orEmpty()
         j.optJSONObject("settings")?.let { sj ->
             val keep = Hub.settings.value
-            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, onboarded = true) }
+            Hub.settings.update { Settings.fromJson(sj).copy(l360Token = keep.l360Token, pinHash = keep.pinHash, mapboxToken = keep.mapboxToken, onboarded = true) }
         }
         j.objs("meta").forEach { o -> dao.putMeta(ConvMeta(o.getString("key"), o.optBoolean("pinned"), o.optBoolean("archived"),
             o.optBoolean("muted"), o.optBoolean("hidden"), o.optLong("folderId"), o.optString("customName"), o.optString("photoUri"),
@@ -186,6 +189,14 @@ object Backup {
         j.objs("extras").forEach { o -> dao.putExtra(ContactExtra(o.getString("phoneKey"), o.optString("instagram"), o.optString("snapchat"),
             o.optString("tiktok"), o.optString("notes"), o.optString("birthday"), o.optString("life360Id"), o.optBoolean("priority"), o.optInt("groupColor"))) }
         j.objs("groups").forEach { o -> dao.putGroup(GroupInfo(o.getString("convKey"), o.optString("name"), o.optString("photoUri"))) }
+        MockStore.load()
+        j.optJSONArray("mockFavorites")?.let { a ->
+            val have = MockStore.favorites.value.map { it.id }.toSet()
+            com.yatesv.contacthub.data.MockItem.listFromJson(a.toString()).asReversed().filter { it.id !in have }.forEach { MockStore.saveFavorite(it) }
+        }
+        j.optJSONArray("mockRecent")?.let { a ->
+            if (MockStore.history.value.isEmpty()) com.yatesv.contacthub.data.MockItem.listFromJson(a.toString()).asReversed().forEach { MockStore.addHistory(it) }
+        }
         ScheduleWorker.enqueue(ctx, 0)
         Hub.changed()
         return "Restored"

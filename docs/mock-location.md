@@ -43,6 +43,13 @@ Lives in **Settings → Developer → Mock location**.
 | 29 | Self-test | Yes, mock checks in the .txt report |
 | 30 | Shipping | Branch + PR, and this plan in the vault |
 
+## How to use it
+- **Stay in one spot:** move the map so the pin in the middle is on the spot (or search / paste / pick a contact), tap **Start here**.
+- **Drive a route:** move the map to each stop and tap **+ Add stop here** (or long-press the map). Pick a speed, tap **Start route**. Exact speed, end behavior and "start from my real location" are under **More options**.
+- **Saved & recent:** chips at the bottom of the card; ⭐ in the top bar shows everything, including schedules.
+- **While mocking:** pause/stop on the card or in the notification. "Go somewhere else" jumps to a new spot without stopping first.
+- Favorites and recents are included in Contact Hub's backup.
+
 ## How it works
 - Android only lets **one** app fake GPS: the one picked in **Developer options → Select mock location app**. The walkthrough opens each screen for you.
 - A foreground service feeds the fake location to the GPS, network and fused providers every 5 seconds, so every app sees it.

@@ -61,6 +61,37 @@ object Motion {
 
     fun enabled(s: Settings = Hub.settings.value) = !systemMotionOff() && s.motion != "off"
 
+    /** Parts of the app that can each have their own curve. */
+    enum class Cat(val key: String, val label: String) {
+        ALL("all", "Everything"), PAGES("pages", "Page slides"), BUBBLES("bubbles", "Message bubbles"),
+        REACTIONS("reactions", "Reactions & pops"), MENUS("menus", "Menus & sheets"),
+    }
+
+    /** Starting points for your own curve. */
+    val curvePresets = linkedMapOf(
+        "Ease out" to "0.150,0.550;0.400,0.900;0.700,0.990",
+        "Overshoot" to "0.250,0.600;0.450,1.120;0.700,0.990",
+        "Bounce" to "0.300,0.950;0.420,0.780;0.560,1.000;0.680,0.920;0.820,1.000",
+        "Elastic" to "0.220,1.180;0.380,0.880;0.540,1.070;0.700,0.970;0.850,1.010",
+    )
+
+    /** The curve (dots + duration) for one part of the app: its own if you customized it, otherwise "All". */
+    fun curveFor(cat: Cat, s: Settings = Hub.settings.value): Pair<String, Int> {
+        if (cat != Cat.ALL) runCatching {
+            org.json.JSONObject(s.curveOverrides).optJSONObject(cat.key)?.let { return it.optString("p", s.curvePoints) to it.optInt("d", s.curveDuration) }
+        }
+        return s.curvePoints to s.curveDuration
+    }
+
+    private val easingCache = java.util.concurrent.ConcurrentHashMap<String, CurveEasing>()
+    fun easing(points: String) = easingCache.getOrPut(points) { CurveEasing.parse(points) }
+
+    fun <T> spec(cat: Cat, s: Settings = Hub.settings.value, scale: Float = 1f): FiniteAnimationSpec<T> = when {
+        !enabled(s) -> snap()
+        s.motion == "curve" -> curveFor(cat, s).let { (p, d) -> androidx.compose.animation.core.tween((d * scale).toInt(), easing = easing(p)) }
+        else -> params(s)?.let { spring(it.damping, it.stiffness) } ?: snap()
+    }
+
     /** Spring settings, or null when motion is off or you're using your own curve. */
     fun params(s: Settings = Hub.settings.value): SpringParams? = if (systemMotionOff()) null else when (s.motion) {
         "off", "curve" -> null
@@ -70,14 +101,14 @@ object Motion {
 
     fun <T> spec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> = when {
         !enabled(s) -> snap()
-        s.motion == "curve" -> androidx.compose.animation.core.tween(s.curveDuration, easing = CurveEasing.parse(s.curvePoints))
+        s.motion == "curve" -> androidx.compose.animation.core.tween(s.curveDuration, easing = easing(s.curvePoints))
         else -> params(s)?.let { spring(it.damping, it.stiffness) } ?: snap()
     }
 
     /** Slightly bouncier version for small pops (reactions, bubbles). */
     fun <T> popSpec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> = when {
         !enabled(s) -> snap()
-        s.motion == "curve" -> androidx.compose.animation.core.tween((s.curveDuration * 0.8f).toInt(), easing = CurveEasing.parse(s.curvePoints))
+        s.motion == "curve" -> curveFor(Cat.REACTIONS, s).let { (p, d) -> androidx.compose.animation.core.tween((d * 0.8f).toInt(), easing = easing(p)) }
         else -> params(s)?.let { spring((it.damping * 0.7f).coerceAtLeast(0.35f), it.stiffness) } ?: snap()
     }
 

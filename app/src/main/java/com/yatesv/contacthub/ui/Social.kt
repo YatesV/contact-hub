@@ -226,14 +226,13 @@ fun SocialSearchScreen(number: String, start: Social) {
             Box(Modifier.weight(1f)) {
                 AndroidView(factory = { ctx ->
                     WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
+                        setUpLikeChrome()
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                                 val url = request.url.toString()
                                 profileFromUrl(social, url)?.let { found = it }
                                 // Keep normal web links inside; don't jump out to the app
-                                return !url.startsWith("http")
+                                return isAppLink(url)
                             }
                             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                                 loading = true

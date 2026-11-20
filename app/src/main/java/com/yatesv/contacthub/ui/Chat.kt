@@ -40,6 +40,8 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -189,13 +191,17 @@ fun ChatScreen(key: String) {
     var groupDialog by remember { mutableStateOf(false) }
     var colorDialog by remember { mutableStateOf(false) }
     /** Messages you just sent that haven't shown up in the real list yet (shown greyed as "Sending…"). */
-    var pending by remember { mutableStateOf(listOf<Msg>()) }
+    val queue by com.yatesv.contacthub.engine.SendQueue.items.collectAsState()
+    var failedTap by remember { mutableStateOf<com.yatesv.contacthub.engine.SendQueue.Item?>(null) }
     /** Where each bubble is on screen, for the iOS-style long-press menu. */
     val bounds = remember { androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
     /** Messages already on screen when the chat opened (no entrance animation for those). */
     val seen = remember(key) { HashSet<String>() }
     var initialDone by remember(key) { mutableStateOf(false) }
     val view = androidx.compose.ui.platform.LocalView.current
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    var typing by remember { mutableStateOf(false) }
     val starred by dao.starredFlow().collectAsState(emptyList())
     val addresses = Sender.addressesOf(key)
     val isGroup = Phone.isGroupKey(key)
@@ -243,6 +249,20 @@ fun ChatScreen(key: String) {
         scope.launch { InboxData.updateMeta(key) { it.copy(soundUri = uri?.toString().orEmpty()) } }
     }
 
+    /** React (or un-react) to a message. Sent over RCS in the background, hidden; never as a text. */
+    fun reactTo(m: Msg, emoji: String) {
+        Hub.scope.launch {
+            val existing = dao.findReaction(key, m.key, true, emoji)
+            if (existing != null) { dao.deleteReaction(existing.id); Hub.changed(); return@launch }
+            val id = dao.addReaction(Reaction(convKey = key, msgKey = m.key, msgBody = m.body, emoji = emoji, fromMe = true, pending = true))
+            Hub.changed()
+            val r = Reaction(id, key, m.key, m.body, emoji, true, true)
+            val waiting = if (Hub.rcsState(key) != "sms") Sender.trySendReaction(ctx, r) else "this chat is on SMS"
+            Hub.changed()
+            if (waiting != null) scope.launch { runCatching { snack.showSnackbar("Reaction saved on your phone 🕓 ($waiting). It'll send over RCS later, never as a text.") } }
+        }
+    }
+
     fun send() {
         val body = text.trim()
         if (body.isEmpty()) return
@@ -250,21 +270,18 @@ fun ChatScreen(key: String) {
         Haptics.tap(view)
         SendSound.play()
         Effects.trigger(body)
-        val temp = Msg("p:${System.nanoTime()}", body, System.currentTimeMillis(), true, status = 1)
-        pending = pending + temp
-        // App-wide scope: leaving the chat mid-send must not cancel it
-        Hub.scope.launch {
-            val r = Sender.send(ctx, key, body)
-            kotlinx.coroutines.delay(400)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                pending = pending - temp
-                if (!r.ok) {
-                    if (text.isBlank()) text = body      // don't wipe anything typed since
-                    Haptics.reject(view)
-                    scope.launch { runCatching { snack.showSnackbar(r.error) } }
-                }
-            }
-        }
+        // Queued: sends in the background, in order. You can keep typing and sending.
+        com.yatesv.contacthub.engine.SendQueue.add(ctx, key, body)
+        if (typing) runCatching { focus.requestFocus() }
+    }
+    // Keyboard back after Google Messages was used to send (it can close it); buzz if one failed
+    var lastFailed by remember { mutableStateOf(0) }
+    LaunchedEffect(queue) {
+        val mine = queue.filter { it.key == key }
+        val failed = mine.count { it.state == "failed" }
+        if (failed > lastFailed) Haptics.reject(view)
+        lastFailed = failed
+        if (typing && mine.none { it.state == "sending" }) runCatching { focus.requestFocus(); keyboard?.show() }
     }
 
     Scaffold(
@@ -327,7 +344,11 @@ fun ChatScreen(key: String) {
             val iosMenu = selected != null && settings.menuStyle == "ios"
             Column(Modifier.fillMaxSize().imePadding().then(if (iosMenu) Modifier.blur(14.dp) else Modifier)) {
                 val real = data?.msgs.orEmpty()
-                val waiting = pending.filter { p -> real.none { it.outgoing && it.body.trim() == p.body && it.date >= p.date - 60_000 } }
+                // Your queued messages show faded (or red if they failed) until the real one appears
+                val waiting = queue.filter { q -> q.key == key && real.none { it.outgoing && it.body.trim() == q.body && it.date >= q.created - 60_000 } }
+                    .filterNot { it.state == "sent" && System.currentTimeMillis() - it.sentAt > 15_000 }
+                    .map { q -> Msg("q:${q.id}", q.body, q.created, true, status = if (q.state == "failed") 2 else 1) }
+                val justSent = queue.filter { it.key == key && it.state == "sent" }.map { it.body }.toSet()
                 val msgs = real + waiting
                 LaunchedEffect(data) {
                     if (data != null && !initialDone) { seen.addAll(real.map { it.key }); initialDone = true }
@@ -358,7 +379,7 @@ fun ChatScreen(key: String) {
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp).graphicsLayer { alpha = reveal.value / maxReveal })
                             Box(Modifier.graphicsLayer { translationX = -reveal.value }) {
-                            EnterAnim(isNew, m.outgoing, onShown = {
+                            EnterAnim(isNew, m.outgoing, fromPending = m.outgoing && m.body.trim() in justSent && !m.key.startsWith("q:"), onShown = {
                                 seen.add(m.key)
                                 if (!m.outgoing) Effects.trigger(m.body)
                             }) { Bubble(
@@ -368,8 +389,13 @@ fun ChatScreen(key: String) {
                                 colorOverride = meta.bubbleColor,
                                 memberColor = if (isGroup && !m.outgoing) memberColor(m.sender, extras[Phone.norm(m.sender)]?.groupColor ?: 0) else null,
                                 mention = isGroup && !m.outgoing && settings.myName.isNotBlank() && m.body.contains(settings.myName, true),
-                                onClick = { showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key },
+                                onClick = {
+                                    if (m.key.startsWith("q:") && m.status == 2) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
+                                    else showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key
+                                },
                                 onLong = { Haptics.long(view); selected = m },
+                                onDouble = { Haptics.confirm(view); reactTo(m, settings.doubleTapEmoji) },
+                                doubleEmoji = settings.doubleTapEmoji,
                                 onBounds = { bounds[m.key] = it },
                             ) }
                             }
@@ -378,7 +404,7 @@ fun ChatScreen(key: String) {
                             if (m.key == lastOutKey) Text(
                                 when {
                                     m.status == 1 -> "Sending…"
-                                    m.status == 2 -> "Not delivered"
+                                    m.status == 2 -> "Not delivered · tap to retry"
                                     chatType == "sms" || (!m.rcs && m.key.startsWith("s:")) -> "Sent as text message"
                                     else -> "Sent"
                                 },
@@ -422,7 +448,8 @@ fun ChatScreen(key: String) {
                             verticalAlignment = Alignment.Bottom) {
                             androidx.compose.foundation.text.BasicTextField(
                                 text, { text = it },
-                                Modifier.weight(1f).padding(start = 14.dp, end = 6.dp, top = 9.dp, bottom = 9.dp),
+                                Modifier.weight(1f).padding(start = 14.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
+                                    .focusRequester(focus).onFocusChanged { if (it.isFocused) typing = true },
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
@@ -454,20 +481,7 @@ fun ChatScreen(key: String) {
 
     selected?.let { m ->
         val isStarred = m.key in starred.map { it.msgKey }
-        val onReact: (String) -> Unit = { emoji ->
-            selected = null
-            Haptics.confirm(view)
-            scope.launch {
-                val existing = dao.findReaction(key, m.key, true, emoji)
-                if (existing != null) { dao.deleteReaction(existing.id); Hub.changed(); return@launch }
-                val id = dao.addReaction(Reaction(convKey = key, msgKey = m.key, msgBody = m.body, emoji = emoji, fromMe = true, pending = true))
-                Hub.changed()
-                val r = Reaction(id, key, m.key, m.body, emoji, true, true)
-                val waiting = if (Hub.rcsState(key) != "sms") Sender.trySendReaction(ctx, r) else "this chat is on SMS"
-                Hub.changed()
-                if (waiting != null) snack.showSnackbar("Reaction saved on your phone 🕓 ($waiting). It'll send over RCS later, never as a text.")
-            }
-        }
+        val onReact: (String) -> Unit = { emoji -> selected = null; Haptics.confirm(view); reactTo(m, emoji) }
         val onStar: (Boolean) -> Unit = { on ->
             selected = null
             scope.launch { if (on) dao.star(Starred(m.key, key, m.body, m.date)) else dao.unstar(m.key) }
@@ -481,6 +495,16 @@ fun ChatScreen(key: String) {
         } else {
             MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy)
         }
+    }
+
+    failedTap?.let { f ->
+        AlertDialog(
+            onDismissRequest = { failedTap = null },
+            title = { Text("Not delivered") },
+            text = { Text(f.error.ifBlank { "This message didn't send." } + "\n\nMessages after it in this chat are waiting so they don't arrive out of order.") },
+            confirmButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.retry(f.id); failedTap = null }) { Text("Try again") } },
+            dismissButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.cancel(f.id); failedTap = null }) { Text("Delete") } },
+        )
     }
 
     if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at ->
@@ -530,11 +554,24 @@ private fun isOnlyEmoji(s: String): Boolean {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(
+internal fun Bubble(
     m: Msg, first: Boolean, last: Boolean, isGroup: Boolean, reactions: List<ShownReaction>, showTime: Boolean, starred: Boolean,
     colorOverride: Int, memberColor: Color?, mention: Boolean, onClick: () -> Unit, onLong: () -> Unit,
     onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
+    onDouble: (() -> Unit)? = null,
+    doubleEmoji: String = "❤️",
 ) {
+    // Double-tap effect: bubble bounces, a big emoji pops, and little dots burst out
+    var bursts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val bounce = remember { androidx.compose.animation.core.Animatable(1f) }
+    val pop = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(bursts) {
+        if (bursts == 0) return@LaunchedEffect
+        launch { bounce.snapTo(0.9f); bounce.animateTo(1f, Motion.popSpec()) }
+        pop.snapTo(0f)
+        pop.animateTo(1f, androidx.compose.animation.core.tween(650))
+        pop.snapTo(0f)
+    }
     val style = LocalChatStyle.current
     val ctx = LocalContext.current
     val bg = when {
@@ -560,7 +597,7 @@ private fun Bubble(
             Column(
                 Modifier.widthIn(max = 300.dp)
                     .onGloballyPositioned { onBounds(it.boundsInRoot()) }
-                    .graphicsLayer { alpha = if (m.status == 1 && m.key.startsWith("p:")) 0.6f else 1f }
+                    .graphicsLayer { alpha = if (m.status == 1 && m.key.startsWith("q:")) 0.55f else 1f }
                     .clip(style.bubble(m.outgoing, first, last))
                     .then(when {
                         emojiOnly -> Modifier
@@ -570,7 +607,9 @@ private fun Bubble(
                         else -> Modifier.background(bg)
                     })
                     .then(if (mention) Modifier.border(2.dp, MaterialTheme.colorScheme.tertiary, style.bubble(m.outgoing, first, last)) else Modifier)
-                    .combinedClickable(onClick = onClick, onLongClick = onLong)
+                    .graphicsLayer { scaleX = bounce.value; scaleY = bounce.value }
+                    .combinedClickable(onClick = onClick, onLongClick = onLong,
+                        onDoubleClick = if (onDouble != null) ({ bursts++; onDouble() }) else null)
                     .padding(if (emojiOnly) 2.dp else 0.dp),
             ) {
                 m.attachments.forEach { a ->
@@ -584,6 +623,23 @@ private fun Bubble(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
                 }
                 if (otp != null) TextButton({ copy(ctx, otp) }, Modifier.padding(start = 6.dp)) { Text("Copy code $otp", color = fg, fontWeight = FontWeight.SemiBold) }
+            }
+            // Double-tap burst
+            if (pop.value > 0f) {
+                val t = pop.value
+                val heartScale = if (t < 0.35f) t / 0.35f * 1.4f else 1.4f - (t - 0.35f) / 0.65f * 0.4f
+                androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                    val c = center
+                    val r = size.minDimension * (0.3f + t * 0.9f)
+                    for (i in 0 until 10) {
+                        val a = Math.toRadians(i * 36.0 + 10)
+                        drawCircle(androidx.compose.ui.graphics.Color(0xFFFF4D6D).copy(alpha = (1f - t).coerceIn(0f, 1f)),
+                            radius = 6f * (1f - t * 0.6f),
+                            center = androidx.compose.ui.geometry.Offset(c.x + (Math.cos(a) * r).toFloat(), c.y + (Math.sin(a) * r).toFloat()))
+                    }
+                }
+                Text(doubleEmoji, fontSize = 44.sp, modifier = Modifier.align(Alignment.Center)
+                    .graphicsLayer { scaleX = heartScale; scaleY = heartScale; alpha = (1f - ((t - 0.6f) / 0.4f).coerceAtLeast(0f)).coerceIn(0f, 1f) })
             }
             if (reactions.isNotEmpty()) {
                 Row(

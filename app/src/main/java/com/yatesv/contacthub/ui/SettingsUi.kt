@@ -269,10 +269,26 @@ private fun MessagingPage() {
     ModeSwitch()
     SectionTitle("Sending")
     ChoiceRow("Send texts through", listOf("auto" to "Google/Samsung Messages (RCS), SMS backup", "sms" to "Plain SMS only"), s.engine) { v -> set { it.copy(engine = v) } }
+    SwitchRow("Hide Google Messages while sending", "You never see it switch apps", s.coverWhileSending) { v -> set { it.copy(coverWhileSending = v) } }
+    if (s.coverWhileSending) {
+        ChoiceRow("How to hide it", listOf("auto" to "Auto (best for this phone)", "popup" to "Tiny pop-up window", "mirror" to "Live mirror", "snapshot" to "Snapshot"), s.hideMethod) { v ->
+            set { it.copy(hideMethod = v) }
+        }
+        Text(
+            "Tiny pop-up: Google Messages opens as a small Samsung window, Contact Hub stays fully usable. Live mirror: an animated copy of the chat covers it for a second. " +
+                "Snapshot: a frozen picture of the screen covers it for a second (looks exactly the same). " +
+                (if (s.hideWinner.isNotBlank()) "Auto is using: ${s.hideWinner}. " else "Auto uses Snapshot until the self-test finds something better. ") +
+                "Test them in Settings → Developer.",
+            Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     Text("Stealth rule: nothing Contact Hub sends looks different from your normal Messages app. No branding, no duplicate texts, reactions and edits only over RCS, and group names/photos stay on your phone.",
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("Reactions")
     SwitchRow("Turn \"Liked …\" texts into reactions", "When iPhone or SMS contacts react, show a real reaction instead of the text", s.convertReactions) { v -> set { it.copy(convertReactions = v) } }
+    SectionTitle("Double-tap")
+    ChoiceRow("Double-tap a message to react with", com.yatesv.contacthub.data.Reactions.picker.map { it to it }, s.doubleTapEmoji) { v -> set { it.copy(doubleTapEmoji = v) } }
+    Text("Double-tap again to remove it. Sent over RCS in the background, never as a text.",
+        Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("History")
     SwitchRow("Show chats older than 6 months", "Off = faster loading", s.olderThan6Months) { v -> set { it.copy(olderThan6Months = v) } }
     SectionTitle("@mentions")

@@ -37,6 +37,10 @@ data class Settings(
     // Messaging
     val engine: String = "auto",            // auto (Google/Samsung Messages first, SMS fallback), sms
     val handleNotifications: Boolean = true,
+    val coverWhileSending: Boolean = true,     // hide Google Messages while it sends
+    val hideMethod: String = "auto",           // auto, popup, mirror, snapshot
+    val hideWinner: String = "",               // best method found by the self-test on this phone
+    val doubleTapEmoji: String = "❤️",
     val convertReactions: Boolean = true,
     val olderThan6Months: Boolean = false,
     val autoReplyOn: Boolean = false,
@@ -63,6 +67,11 @@ data class Settings(
     val motion: String = "ios",             // ios, bouncy, smooth, snappy, custom (spring), curve (your own curve), off
     val curvePoints: String = "0.25,0.1;0.45,0.85;0.7,1.04",  // dots you placed on the curve editor (x,y;x,y)
     val curveDuration: Int = 420,
+    /** Per-category curve overrides: {"pages":{"p":"x,y;...","d":420}, ...}. Missing = uses the "All" curve. */
+    val curveOverrides: String = "{}",
+    /** Your saved curves: [{"name":"Snappy","p":"...","d":300}, ...] */
+    val savedCurves: String = "[]",
+    val curveSnap: Boolean = false,
     val springDamping: Float = 0.86f,       // used when motion = custom
     val springStiffness: Float = 380f,
     val transition: String = "slide",       // slide, fade, zoom
@@ -90,7 +99,9 @@ data class Settings(
         put("showTimestamps", showTimestamps); put("swipeLeft", swipeLeft); put("swipeRight", swipeRight)
         put("wallpaper", wallpaper); put("wallpaperDim", wallpaperDim.toDouble()); put("emojiSize", emojiSize.toDouble())
         put("sendOnEnter", sendOnEnter); put("showCategories", showCategories); put("navLabels", navLabels); put("startTab", startTab)
-        put("engine", engine); put("handleNotifications", handleNotifications); put("convertReactions", convertReactions)
+        put("engine", engine); put("handleNotifications", handleNotifications); put("coverWhileSending", coverWhileSending);
+        put("hideMethod", hideMethod); put("hideWinner", hideWinner); put("doubleTapEmoji", doubleTapEmoji)
+        put("curveOverrides", curveOverrides); put("savedCurves", savedCurves); put("curveSnap", curveSnap); put("convertReactions", convertReactions)
         put("olderThan6Months", olderThan6Months); put("autoReplyOn", autoReplyOn); put("autoReplyText", autoReplyText); put("myName", myName)
         put("appLock", appLock); put("useBiometric", useBiometric); put("pinHash", pinHash); put("lockAfterSec", lockAfterSec)
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
@@ -118,7 +129,10 @@ data class Settings(
                 emojiSize = j.optDouble("emojiSize", 1.6).toFloat(), sendOnEnter = j.optBoolean("sendOnEnter", false),
                 showCategories = j.optBoolean("showCategories", true), navLabels = j.optBoolean("navLabels", true),
                 startTab = j.optString("startTab", d.startTab),
-                engine = j.optString("engine", d.engine), handleNotifications = j.optBoolean("handleNotifications", true),
+                engine = j.optString("engine", d.engine), handleNotifications = j.optBoolean("handleNotifications", true), coverWhileSending = j.optBoolean("coverWhileSending", true),
+                hideMethod = j.optString("hideMethod", "auto"), hideWinner = j.optString("hideWinner", ""),
+                doubleTapEmoji = j.optString("doubleTapEmoji", "❤️"), curveOverrides = j.optString("curveOverrides", "{}"),
+                savedCurves = j.optString("savedCurves", "[]"), curveSnap = j.optBoolean("curveSnap", false),
                 convertReactions = j.optBoolean("convertReactions", true), olderThan6Months = j.optBoolean("olderThan6Months", false),
                 autoReplyOn = j.optBoolean("autoReplyOn", false), autoReplyText = j.optString("autoReplyText", d.autoReplyText), myName = j.optString("myName", ""),
                 appLock = j.optBoolean("appLock", false), useBiometric = j.optBoolean("useBiometric", true),

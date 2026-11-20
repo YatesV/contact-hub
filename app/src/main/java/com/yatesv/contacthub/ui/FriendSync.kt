@@ -160,6 +160,7 @@ fun FriendSyncScreen(social: Social) {
     var checked by remember { mutableStateOf(emptySet<String>()) }
     var linked by remember { mutableStateOf(0) }
     var started by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
     var web by remember { mutableStateOf<WebView?>(null) }
     val base = if (social == Social.INSTAGRAM) "https://www.instagram.com" else "https://www.tiktok.com"
     val loginUrl = if (social == Social.INSTAGRAM) "$base/accounts/login/" else "$base/login"
@@ -210,17 +211,24 @@ fun FriendSyncScreen(social: Social) {
             // The real site, signed in as you. Hidden behind the progress/review screens once you're in.
             AndroidView(factory = { ctx ->
                 WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    setUpLikeChrome()
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                         WebViewCompat.addWebMessageListener(this, "CHFriends", setOf(base)) { _, msg, _, _, _ ->
                             msg.data?.let { d -> post { onMessage(d) } }
                         }
                     }
                     webViewClient = object : WebViewClient() {
-                        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {}
+                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                            val u = request.url.toString()
+                            if (isAppLink(u)) { HubLog.d("FriendSync", "skipped app link ${request.url.scheme}"); return true }
+                            return false
+                        }
+                        override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest, err: android.webkit.WebResourceError) {
+                            if (request.isForMainFrame) { error = "page didn't load (${err.description})"; HubLog.w("FriendSync", "load error ${err.errorCode} ${err.description}") }
+                        }
+                        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) { loading = true }
                         override fun onPageFinished(view: WebView, url: String) {
+                            loading = false
                             if (!signedIn()) return
                             when {
                                 !started -> start(view)
@@ -232,6 +240,7 @@ fun FriendSyncScreen(social: Social) {
                     loadUrl(if (signedIn()) base else loginUrl)
                 }
             }, modifier = Modifier.fillMaxSize())
+            if (loading && phase == Phase.LOGIN) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
 
             AnimatedContent(phase, label = "sync", transitionSpec = {
                 (fadeIn(Motion.spec()) + slideInVertically(Motion.spec()) { it / 8 }) togetherWith fadeOut(Motion.spec())

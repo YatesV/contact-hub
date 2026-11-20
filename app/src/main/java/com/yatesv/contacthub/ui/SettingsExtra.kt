@@ -12,6 +12,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,8 +49,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -84,19 +88,11 @@ fun MotionPage() {
         }
         replay++; Haptics.tap(view)
     }
-    // Graph + live preview. In "My curve" you edit the graph directly.
-    HubCard {
-        Text(if (s.motion == "curve") "Your curve" else "How it moves", style = MaterialTheme.typography.labelLarge)
-        if (s.motion == "curve") {
-            CurveEditor(s.curvePoints, Modifier.fillMaxWidth().height(220.dp).padding(vertical = 8.dp)) { pts ->
-                upd { it.copy(curvePoints = pts) }; replay++
-            }
-            Text("Tap to add a dot · drag to bend · double-tap a dot to remove it. Dots above the dashed line make it overshoot.",
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton({ upd { it.copy(curvePoints = Settings().curvePoints) }; replay++ }) { Text("Reset curve") }
-            }
-        } else {
+    if (s.motion == "curve") CurveStudio(s)
+    // Graph + live preview for the spring styles
+    if (s.motion != "curve") HubCard {
+        Text("How it moves", style = MaterialTheme.typography.labelLarge)
+        run {
             SpringGraph(Motion.params(s), MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.outlineVariant,
                 Modifier.fillMaxWidth().height(120.dp).padding(vertical = 8.dp).semantics { contentDescription = "Spring curve graph" })
             Text("Time →   (the line is where it ends up; bumps above it are bounce). Pick \"My curve\" to draw your own.",
@@ -105,12 +101,6 @@ fun MotionPage() {
         Spacer(Modifier.height(10.dp))
         MotionPreview(s, replay)
         TextButton({ replay++; Haptics.tap(view) }) { Text("Replay") }
-    }
-    if (s.motion == "curve") {
-        SectionTitle("Duration")
-        SliderRow("How long animations take", s.curveDuration.toFloat(), 150f..1200f, "${s.curveDuration} ms") { v ->
-            upd { it.copy(curveDuration = v.toInt()) }; replay++
-        }
     }
     SectionTitle("Fine-tune (Spring)")
     SliderRow("Bounciness", 1.2f - s.springDamping, 0.05f..0.85f, "%.0f%%".format((1.2f - s.springDamping) / 0.85f * 100)) { v ->
@@ -151,75 +141,236 @@ private fun MotionPreview(s: Settings, replay: Int) {
 
 /**
  * Curve editor: time goes left to right, progress bottom to top. Start and end dots are fixed;
- * the dots in between are yours.
+ * the dots in between are yours. [onLive] fires on every move so previews follow your finger;
+ * [onChange] fires when you let go (that's when it's saved).
  */
 @Composable
-fun CurveEditor(points: String, modifier: Modifier, onChange: (String) -> Unit) {
+fun CurveEditor(points: String, snap: Boolean, modifier: Modifier, onLive: (String) -> Unit, onChange: (String) -> Unit) {
     val view = LocalView.current
     val accent = MaterialTheme.colorScheme.primary
     val grid = MaterialTheme.colorScheme.outlineVariant
     val dotFill = MaterialTheme.colorScheme.background
-    var pts by remember(points) { mutableStateOf(CurveEasing.parse(points).pts.drop(1).dropLast(1)) }
-    var dragging by remember { mutableIntStateOf(-1) }
+    val label = MaterialTheme.colorScheme.onSurface
+    // One state object for the editor's whole life, so the gesture code always edits the current dots
+    val pts = remember { mutableStateOf(CurveEasing.parse(points).pts.drop(1).dropLast(1)) }
+    val dragging = remember { mutableIntStateOf(-1) }
+    val snapNow = androidx.compose.runtime.rememberUpdatedState(snap)
+    LaunchedEffect(points) { if (dragging.intValue < 0) pts.value = CurveEasing.parse(points).pts.drop(1).dropLast(1) }
     val yMin = -0.3f; val yMax = 1.35f
-    fun commit() = onChange(CurveEasing(pts).serialize())
+    fun ser() = CurveEasing(pts.value).serialize()
+    fun snapped(v: Float) = if (snapNow.value) (Math.round(v / 0.05f) * 0.05f) else v
 
-    androidx.compose.foundation.Canvas(modifier
-        .clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f))
-        .semantics { contentDescription = "Animation curve editor" }
-        .pointerInput(Unit) {
+    Box(modifier) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()
+            .clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f))
+            .semantics { contentDescription = "Animation curve editor" }
+            .pointerInput(Unit) {
+                val pad = 24.dp.toPx()
+                fun toVal(o: androidx.compose.ui.geometry.Offset) =
+                    snapped(((o.x - pad) / (size.width - 2 * pad))).coerceIn(0.02f, 0.98f) to
+                        snapped(yMax - (o.y - pad) / (size.height - 2 * pad) * (yMax - yMin)).coerceIn(yMin, yMax)
+                fun toPx(p: Pair<Float, Float>) = androidx.compose.ui.geometry.Offset(pad + p.first * (size.width - 2 * pad), pad + (yMax - p.second) / (yMax - yMin) * (size.height - 2 * pad))
+                fun near(o: androidx.compose.ui.geometry.Offset, r: Float) = pts.value.indices.minByOrNull { (toPx(pts.value[it]) - o).getDistance() }
+                    ?.takeIf { (toPx(pts.value[it]) - o).getDistance() < r } ?: -1
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val hit = near(down.position, 32.dp.toPx())
+                    if (hit >= 0) {
+                        // Drag a dot
+                        dragging.intValue = hit; Haptics.tap(view)
+                        var moved = false
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val ch = ev.changes.firstOrNull() ?: break
+                            if (!ch.pressed) break
+                            if ((ch.position - down.position).getDistance() > 4f) moved = true
+                            ch.consume()
+                            val v = toVal(ch.position)
+                            val i = dragging.intValue
+                            val lo = pts.value.getOrNull(i - 1)?.first?.plus(0.02f) ?: 0.02f
+                            val hi = pts.value.getOrNull(i + 1)?.first?.minus(0.02f) ?: 0.98f
+                            pts.value = pts.value.toMutableList().also { it[i] = v.first.coerceIn(lo, hi) to v.second }
+                            onLive(ser())
+                        }
+                        dragging.intValue = -1
+                        if (moved) onChange(ser())
+                        else {
+                            // A quick second tap on the same dot removes it
+                            val second = withTimeoutOrNull(300) { awaitFirstDown() }
+                            if (second != null && near(second.position, 32.dp.toPx()) == hit) {
+                                pts.value = pts.value.filterIndexed { k, _ -> k != hit }; Haptics.reject(view); onLive(ser()); onChange(ser())
+                            }
+                        }
+                    } else {
+                        // Tap empty space: add a dot there
+                        val up = waitForUpOrCancellation()
+                        if (up != null && pts.value.size < 8) {
+                            pts.value = (pts.value + toVal(up.position)).sortedBy { it.first }
+                            Haptics.tap(view); onLive(ser()); onChange(ser())
+                        }
+                    }
+                }
+            }) {
             val pad = 24.dp.toPx()
-            fun toVal(o: androidx.compose.ui.geometry.Offset) =
-                ((o.x - pad) / (size.width - 2 * pad)).coerceIn(0.02f, 0.98f) to (yMax - (o.y - pad) / (size.height - 2 * pad) * (yMax - yMin)).coerceIn(yMin, yMax)
-            fun toPx(p: Pair<Float, Float>) = androidx.compose.ui.geometry.Offset(pad + p.first * (size.width - 2 * pad), pad + (yMax - p.second) / (yMax - yMin) * (size.height - 2 * pad))
-            fun near(o: androidx.compose.ui.geometry.Offset) = pts.indices.minByOrNull { (toPx(pts[it]) - o).getDistance() }
-                ?.takeIf { (toPx(pts[it]) - o).getDistance() < 28.dp.toPx() } ?: -1
-            detectTapGestures(
-                onDoubleTap = { o -> val i = near(o); if (i >= 0) { pts = pts.filterIndexed { k, _ -> k != i }; Haptics.reject(view); commit() } },
-                onTap = { o -> if (near(o) < 0 && pts.size < 8) { pts = (pts + toVal(o)).sortedBy { it.first }; Haptics.tap(view); commit() } },
-            )
-        }
-        .pointerInput(Unit) {
-            val pad = 24.dp.toPx()
-            fun toVal(o: androidx.compose.ui.geometry.Offset) =
-                ((o.x - pad) / (size.width - 2 * pad)).coerceIn(0.02f, 0.98f) to (yMax - (o.y - pad) / (size.height - 2 * pad) * (yMax - yMin)).coerceIn(yMin, yMax)
-            fun toPx(p: Pair<Float, Float>) = androidx.compose.ui.geometry.Offset(pad + p.first * (size.width - 2 * pad), pad + (yMax - p.second) / (yMax - yMin) * (size.height - 2 * pad))
-            detectDragGestures(
-                onDragStart = { o -> dragging = pts.indices.minByOrNull { (toPx(pts[it]) - o).getDistance() }
-                    ?.takeIf { (toPx(pts[it]) - o).getDistance() < 32.dp.toPx() } ?: -1
-                    if (dragging >= 0) Haptics.tap(view) },
-                onDragEnd = { if (dragging >= 0) commit(); dragging = -1 },
-                onDragCancel = { dragging = -1 },
-            ) { change, _ ->
-                if (dragging < 0) return@detectDragGestures
-                change.consume()
-                val v = toVal(change.position)
-                // Keep dots in time order: a dot can't pass its neighbours
-                val lo = pts.getOrNull(dragging - 1)?.first?.plus(0.02f) ?: 0.02f
-                val hi = pts.getOrNull(dragging + 1)?.first?.minus(0.02f) ?: 0.98f
-                pts = pts.toMutableList().also { it[dragging] = v.first.coerceIn(lo, hi) to v.second }
+            val w = size.width - 2 * pad; val h = size.height - 2 * pad
+            fun px(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(pad + x * w, pad + (yMax - y) / (yMax - yMin) * h)
+            val steps = if (snapNow.value) 20 else 4
+            for (i in 0..steps) { val x = pad + w * i / steps; drawLine(grid.copy(alpha = if (snapNow.value) 0.5f else 1f), androidx.compose.ui.geometry.Offset(x, pad), androidx.compose.ui.geometry.Offset(x, pad + h), 1f) }
+            drawLine(grid, px(0f, 0f), px(1f, 0f), 2f)
+            drawLine(grid, px(0f, 1f), px(1f, 1f), 2f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
+            val easing = CurveEasing(pts.value)
+            val path = androidx.compose.ui.graphics.Path()
+            for (i in 0..160) { val x = i / 160f; val p = px(x, easing.transform(x)); if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y) }
+            drawPath(path, accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            listOf(0f to 0f, 1f to 1f).forEach { (x, y) -> drawCircle(grid, 9f, px(x, y)) }
+            pts.value.forEachIndexed { i, (x, y) ->
+                val c = px(x, y)
+                drawCircle(accent.copy(alpha = 0.18f), if (i == dragging.intValue) 38f else 26f, c)
+                drawCircle(dotFill, 14f, c)
+                drawCircle(accent, 14f, c, style = androidx.compose.ui.graphics.drawscope.Stroke(5f))
             }
-        }) {
-        val pad = 24.dp.toPx()
-        val w = size.width - 2 * pad; val h = size.height - 2 * pad
-        fun px(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(pad + x * w, pad + (yMax - y) / (yMax - yMin) * h)
-        // grid
-        for (i in 0..4) { val x = pad + w * i / 4; drawLine(grid, androidx.compose.ui.geometry.Offset(x, pad), androidx.compose.ui.geometry.Offset(x, pad + h), 1f) }
-        drawLine(grid, px(0f, 0f), px(1f, 0f), 2f)
-        drawLine(grid, px(0f, 1f), px(1f, 1f), 2f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
-        // curve
-        val easing = CurveEasing(pts)
-        val path = androidx.compose.ui.graphics.Path()
-        for (i in 0..120) { val x = i / 120f; val p = px(x, easing.transform(x)); if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y) }
-        drawPath(path, accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
-        // fixed ends
-        listOf(0f to 0f, 1f to 1f).forEach { (x, y) -> drawCircle(grid, 9f, px(x, y)) }
-        // your dots
-        pts.forEachIndexed { i, (x, y) ->
-            val c = px(x, y)
-            drawCircle(accent.copy(alpha = 0.18f), if (i == dragging) 36f else 26f, c)
-            drawCircle(dotFill, 14f, c)
-            drawCircle(accent, 14f, c, style = androidx.compose.ui.graphics.drawscope.Stroke(5f))
+        }
+        // Numbers for the dot you're dragging
+        val d = dragging.intValue
+        if (d >= 0) pts.value.getOrNull(d)?.let { (x, y) ->
+            Text("time ${"%.2f".format(x)}  ·  position ${"%.2f".format(y)}", style = MaterialTheme.typography.labelMedium, color = label,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 6.dp).clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(horizontal = 8.dp, vertical = 3.dp))
+        }
+    }
+}
+
+/** Curve studio: pick a part of the app, start from a preset or a saved curve, bend it, see it live. */
+@Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+fun CurveStudio(s: Settings) {
+    val view = LocalView.current
+    var cat by remember { mutableStateOf(Motion.Cat.ALL) }
+    var menu by remember { mutableStateOf(false) }
+    var saveDialog by remember { mutableStateOf(false) }
+    val (savedPts, savedDur) = Motion.curveFor(cat, s)
+    var live by remember(cat, savedPts) { mutableStateOf(savedPts) }
+    val overrides = remember(s.curveOverrides) { runCatching { org.json.JSONObject(s.curveOverrides) }.getOrDefault(org.json.JSONObject()) }
+    val customized = cat != Motion.Cat.ALL && overrides.has(cat.key)
+    val saved = remember(s.savedCurves) { runCatching { org.json.JSONArray(s.savedCurves) }.getOrDefault(org.json.JSONArray()) }
+
+    fun write(points: String = live, duration: Int = savedDur) {
+        if (cat == Motion.Cat.ALL) upd { it.copy(curvePoints = points, curveDuration = duration) }
+        else {
+            val o = org.json.JSONObject(s.curveOverrides).put(cat.key, org.json.JSONObject().put("p", points).put("d", duration))
+            upd { it.copy(curveOverrides = o.toString()) }
+        }
+    }
+
+    HubCard {
+        // Category picker
+        Box {
+            Row(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable { menu = true }.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Editing: ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(cat.label, style = MaterialTheme.typography.labelLarge)
+                if (customized) Text("  • custom", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text("  ▾", style = MaterialTheme.typography.labelLarge)
+            }
+            androidx.compose.material3.DropdownMenu(menu, { menu = false }) {
+                Motion.Cat.entries.forEach { c ->
+                    androidx.compose.material3.DropdownMenuItem({
+                        Column {
+                            Text(c.label)
+                            Text(if (c == Motion.Cat.ALL) "Used by everything you haven't customized" else if (overrides.has(c.key)) "Custom curve" else "Uses \"Everything\"",
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }, { cat = c; menu = false; Haptics.tap(view) })
+                }
+            }
+        }
+        CurveEditor(savedPts, s.curveSnap, Modifier.fillMaxWidth().height(230.dp).padding(vertical = 10.dp),
+            onLive = { live = it }, onChange = { live = it; write(it) })
+        Text("Tap to add a dot · drag to bend · double-tap a dot to remove. Dots above the dashed line overshoot.",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        CategoryPreview(cat, live, savedDur)
+    }
+    SliderRow("Duration (${cat.label.lowercase()})", savedDur.toFloat(), 150f..1200f, "$savedDur ms") { v -> write(duration = v.toInt()) }
+    SwitchRow("Snap dots to grid", null, s.curveSnap) { v -> upd { it.copy(curveSnap = v) } }
+    SectionTitle("Start from")
+    androidx.compose.foundation.layout.FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Motion.curvePresets.forEach { (name, pts) -> Pill(name, live == pts) { live = pts; write(pts); Haptics.tap(view) } }
+        for (i in 0 until saved.length()) {
+            val o = saved.getJSONObject(i)
+            Pill("★ " + o.optString("name"), live == o.optString("p")) { live = o.optString("p"); write(o.optString("p"), o.optInt("d", savedDur)); Haptics.tap(view) }
+        }
+    }
+    Row(Modifier.padding(horizontal = 8.dp)) {
+        TextButton({ saveDialog = true }) { Text("Save this curve") }
+        if (customized) TextButton({
+            val o = org.json.JSONObject(s.curveOverrides).apply { remove(cat.key) }
+            upd { it.copy(curveOverrides = o.toString()) }
+        }) { Text("Use \"Everything\" curve") }
+        if (cat == Motion.Cat.ALL) TextButton({ upd { it.copy(curvePoints = Settings().curvePoints, curveDuration = Settings().curveDuration) } }) { Text("Reset") }
+    }
+    if (saved.length() > 0) TextButton({ upd { it.copy(savedCurves = "[]") } }, Modifier.padding(horizontal = 8.dp)) { Text("Delete saved curves") }
+
+    if (saveDialog) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { saveDialog = false },
+            title = { Text("Save curve") },
+            text = { androidx.compose.material3.OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true) },
+            confirmButton = {
+                TextButton({
+                    val a = org.json.JSONArray(s.savedCurves).put(org.json.JSONObject().put("name", name.ifBlank { "Curve ${saved.length() + 1}" }).put("p", live).put("d", savedDur))
+                    upd { it.copy(savedCurves = a.toString()) }; saveDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton({ saveDialog = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Looping preview that matches what the category animates. Follows your finger while you drag. */
+@Composable
+private fun CategoryPreview(cat: Motion.Cat, points: String, duration: Int) {
+    val st = LocalChatStyle.current
+    val p = remember { Animatable(0f) }
+    LaunchedEffect(points, duration, cat) {
+        val e = Motion.easing(points)
+        while (true) {
+            p.snapTo(0f)
+            p.animateTo(1f, androidx.compose.animation.core.tween(duration, easing = e))
+            kotlinx.coroutines.delay(450)
+        }
+    }
+    val v = p.value
+    BoxWithConstraints(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.4f))) {
+        val w = maxWidth
+        when (cat) {
+            Motion.Cat.ALL, Motion.Cat.PAGES -> {
+                // A page sliding in over another, like opening a chat
+                Box(Modifier.fillMaxSize().padding(10.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
+                    Text("Messages", Modifier.padding(10.dp), style = MaterialTheme.typography.titleSmall)
+                }
+                Box(Modifier.fillMaxSize().padding(10.dp).graphicsLayer { translationX = (1f - v) * w.toPx() }
+                    .clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.background)) {
+                    Text("Chat", Modifier.padding(10.dp), style = MaterialTheme.typography.titleSmall)
+                    Text("Hey!", color = st.sentText, modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp)
+                        .clip(st.bubble(true, true, true)).background(st.sent).padding(horizontal = 12.dp, vertical = 6.dp))
+                }
+            }
+            Motion.Cat.BUBBLES -> Text("On my way 🚗", color = st.sentText, modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp)
+                .graphicsLayer { translationY = (1f - v) * 60.dp.toPx(); val sc = 0.85f + 0.15f * v; scaleX = sc; scaleY = sc; alpha = v.coerceIn(0f, 1f)
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f) }
+                .clip(st.bubble(true, true, true)).background(st.sent).padding(horizontal = 14.dp, vertical = 8.dp))
+            Motion.Cat.REACTIONS -> Box(Modifier.align(Alignment.Center)) {
+                Text("Nice!", color = st.recvText, modifier = Modifier.clip(st.bubble(false, true, true)).background(st.recv).padding(horizontal = 16.dp, vertical = 10.dp))
+                Text("❤️", fontSize = 22.sp, modifier = Modifier.align(Alignment.TopEnd).offset(x = 12.dp, y = (-12).dp).graphicsLayer { scaleX = v; scaleY = v })
+            }
+            Motion.Cat.MENUS -> Column(Modifier.align(Alignment.TopEnd).padding(10.dp).width(150.dp)
+                .graphicsLayer { scaleX = 0.6f + 0.4f * v; scaleY = 0.6f + 0.4f * v; alpha = v.coerceIn(0f, 1f); transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f) }
+                .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(10.dp)) {
+                Text("Copy", style = MaterialTheme.typography.bodyMedium); Text("Star", style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
@@ -300,6 +451,7 @@ fun DeveloperPage() {
     val extra = remember { mutableListOf<String>() }
     var report by remember { mutableStateOf("") }
     var selfTest by remember { mutableStateOf(false) }
+    var hideTest by remember { mutableStateOf(false) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(report.toByteArray()) } }
     }
@@ -338,6 +490,9 @@ fun DeveloperPage() {
 
     SectionTitle("Try things by hand")
     SettingRow("Test RCS sender", "Sends \"Contact Hub test\" to YOUR OWN number through Google Messages") { TextButton({ selfTest = true }) { Text("Run") } }
+    SettingRow("Test hiding methods", "Sends 3 texts to YOUR OWN number, one per method (pop-up, live mirror, snapshot), and picks the best for Auto") {
+        TextButton({ hideTest = true }) { Text("Run") }
+    }
     SettingRow("Test notification", "Shows a sample message notification") {
         TextButton({ scope.launch {
             Notifier.showMessage(ctx, "selftest", "Contact Hub", false, listOf("Contact Hub" to "This is a test notification"))
@@ -356,20 +511,43 @@ fun DeveloperPage() {
     SettingRow("Clear activity log") { TextButton({ HubLog.clear() }) { Text("Clear") } }
 
     if (selfTest) SelfSendDialog(onDone = { line -> selfTest = false; if (line != null) { extra += line; rebuild() } })
+    if (hideTest) SelfSendDialog(title = "Test hiding methods", note = "Sends 3 real texts to the number below, one per hiding method. Watch the screen during each.",
+        run = { ctx2, number ->
+            val key = com.yatesv.contacthub.data.Phone.convKey(listOf(number))
+            val results = mutableListOf<String>()
+            var popupOk = false
+            for (m in listOf("popup", "mirror", "snapshot")) {
+                val r = Sender.send(ctx2, key, "Contact Hub hide test ($m)", listOf(number), forcedHide = m, skipReplyButton = true)
+                val how = com.yatesv.contacthub.engine.MessagesAccessibility.lastHideResult()
+                if (m == "popup" && r.ok && how.contains("small window OK")) popupOk = true
+                results += "Hide test [$m]: sent=${r.ok} ${r.route} · $how ${r.error}"
+                kotlinx.coroutines.delay(1500)
+            }
+            val winner = if (popupOk) "popup" else "snapshot"
+            Hub.settings.update { it.copy(hideWinner = winner) }
+            results += "Auto will use: $winner"
+            results.joinToString("\n")
+        },
+        onDone = { line -> hideTest = false; if (line != null) { extra += line; rebuild() } })
 }
 
 @Composable
-private fun SelfSendDialog(onDone: (String?) -> Unit) {
+private fun SelfSendDialog(
+    title: String = "Test the RCS sender",
+    note: String = "This sends one real text, \"Contact Hub test\", to the number below. Use your own number.",
+    run: (suspend (Context, String) -> String)? = null,
+    onDone: (String?) -> Unit,
+) {
     val ctx = LocalContext.current
     val mine = remember { HubSms.myNumbers(ctx).firstOrNull().orEmpty() }
     var number by remember { mutableStateOf(mine) }
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { if (!busy) onDone(null) },
-        title = { Text("Test the RCS sender") },
+        title = { Text(title) },
         text = {
             Column {
-                Text("This sends one real text, \"Contact Hub test\", to the number below. Use your own number.")
+                Text(note)
                 androidx.compose.material3.OutlinedTextField(number, { number = it }, label = { Text("Your number") }, singleLine = true)
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
             }
@@ -378,11 +556,14 @@ private fun SelfSendDialog(onDone: (String?) -> Unit) {
             TextButton({
                 busy = true
                 Hub.scope.launch {
-                    val key = com.yatesv.contacthub.data.Phone.convKey(listOf(number))
-                    val r = Sender.send(ctx, key, "Contact Hub test", listOf(number))
-                    onDone("RCS sender test: ok=${r.ok} route=${r.route} ${r.error}")
+                    val line = if (run != null) run(ctx, number) else {
+                        val key = com.yatesv.contacthub.data.Phone.convKey(listOf(number))
+                        val r = Sender.send(ctx, key, "Contact Hub test", listOf(number), skipReplyButton = true)
+                        "RCS sender test: ok=${r.ok} route=${r.route} hide=${com.yatesv.contacthub.engine.MessagesAccessibility.lastHideResult()} ${r.error}"
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(line) }
                 }
-            }, enabled = !busy && number.count { it.isDigit() } >= 7) { Text("Send test") }
+            }, enabled = !busy && number.count { it.isDigit() } >= 7) { Text(if (run != null) "Run test" else "Send test") }
         },
         dismissButton = { TextButton({ onDone(null) }, enabled = !busy) { Text("Cancel") } },
     )

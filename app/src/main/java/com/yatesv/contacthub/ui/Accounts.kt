@@ -107,9 +107,7 @@ fun Life360SignInScreen(onDone: () -> Unit = { if (Nav.top == Screen.Life360Sign
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             AndroidView(factory = { ctx ->
                 WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    setUpLikeChrome()
                     val origins = setOf("https://life360.com", "https://*.life360.com")
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                         WebViewCompat.addWebMessageListener(this, "CHToken", origins) { _, message, _, _, _ ->
@@ -120,6 +118,7 @@ fun Life360SignInScreen(onDone: () -> Unit = { if (Nav.top == Screen.Life360Sign
                     val docStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
                     if (docStart) WebViewCompat.addDocumentStartJavaScript(this, HOOK, origins)
                     webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest) = isAppLink(request.url.toString())
                         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) { loading = true }
                         override fun onPageFinished(view: WebView, url: String) {
                             loading = false
@@ -133,3 +132,28 @@ fun Life360SignInScreen(onDone: () -> Unit = { if (Nav.top == Screen.Life360Sign
         }
     }
 }
+
+/**
+ * Sets up an in-app browser so sites load like they do in Chrome:
+ * - normal Chrome user agent (Instagram/TikTok/Life360 show blank or block logins for embedded browsers)
+ * - links that try to jump to their app (instagram://, intent://, snssdk://) are ignored instead of breaking the page
+ * - cookies, storage and pop-up logins work
+ */
+@SuppressLint("SetJavaScriptEnabled")
+fun WebView.setUpLikeChrome() {
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    @Suppress("DEPRECATION") settings.databaseEnabled = true
+    settings.loadWithOverviewMode = true
+    settings.useWideViewPort = true
+    settings.javaScriptCanOpenWindowsAutomatically = true
+    settings.mediaPlaybackRequiresUserGesture = true
+    settings.userAgentString = settings.userAgentString
+        .replace("; wv", "")
+        .replace(Regex("Version/\\d+\\.\\d+ "), "")
+    CookieManager.getInstance().setAcceptCookie(true)
+    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+}
+
+/** True for links a web view can't open (app links); those are skipped so the page keeps working. */
+fun isAppLink(url: String) = !(url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:"))

@@ -9,6 +9,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -50,10 +57,11 @@ import kotlinx.coroutines.launch
 
 /** New message: rises from the text box with a spring (old messages just appear). */
 @Composable
-fun EnterAnim(isNew: Boolean, outgoing: Boolean, onShown: () -> Unit, content: @Composable () -> Unit) {
-    val p = remember { Animatable(if (isNew && Motion.params() != null) 0f else 1f) }
+fun EnterAnim(isNew: Boolean, outgoing: Boolean, fromPending: Boolean = false, onShown: () -> Unit, content: @Composable () -> Unit) {
+    // A message that was showing faded while sending just "fills in" with a tiny pop instead of flying in again
+    val p = remember { Animatable(if (isNew && Motion.enabled()) (if (fromPending) 0.85f else 0f) else 1f) }
     LaunchedEffect(Unit) {
-        if (p.value < 1f) p.animateTo(1f, Motion.popSpec())
+        if (p.value < 1f) p.animateTo(1f, if (Hub.settings.value.motion == "curve") Motion.spec(Motion.Cat.BUBBLES) else Motion.popSpec())
         onShown()
     }
     val density = LocalDensity.current
@@ -93,7 +101,7 @@ fun IosMessageMenu(
     onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit,
 ) {
     val appear = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { appear.animateTo(1f, Motion.popSpec()) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, if (Hub.settings.value.motion == "curve") Motion.spec(Motion.Cat.MENUS) else Motion.popSpec()) }
     val style = LocalChatStyle.current
     val density = LocalDensity.current
     Popup(popupPositionProvider = object : PopupPositionProvider {
@@ -169,5 +177,48 @@ private fun MenuItem(label: String, icon: ImageVector, onClick: () -> Unit) {
     Row(Modifier.clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f))
         Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * What the "live mirror" overlay shows while Google Messages sends: the same chat, still animating,
+ * with your message filling in when it's sent. Drawn from Contact Hub's own copy of the chat.
+ */
+@Composable
+fun ChatMirror(key: String) {
+    HubTheme {
+        val data = com.yatesv.contacthub.ui.ChatCache.map[key]
+        val queue by com.yatesv.contacthub.engine.SendQueue.items.collectAsState()
+        val st = LocalChatStyle.current
+        val name = InboxData.nameFor(key, com.yatesv.contacthub.engine.Sender.addressesOf(key), null, null)
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.systemBars)) {
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Avatar(name, Hub.contacts.cached(key.substringBefore(','))?.photo, 40.dp, group = com.yatesv.contacthub.data.Phone.isGroupKey(key))
+                Text(name, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 2.dp))
+            }
+            val real = data?.msgs.orEmpty().takeLast(40)
+            val waiting = queue.filter { q -> q.key == key && q.state != "sent" }
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true) {
+                items(waiting.size) { i ->
+                    val q = waiting.asReversed()[i]
+                    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "s").animateFloat(0.45f, 0.75f,
+                        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(600), androidx.compose.animation.core.RepeatMode.Reverse), label = "a")
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp), contentAlignment = Alignment.CenterEnd) {
+                        Text(q.body, color = st.sentText, fontSize = 16.sp, modifier = Modifier.widthIn(max = 300.dp)
+                            .graphicsLayer { alpha = pulse.value }.clip(st.bubble(true, true, true)).background(st.sent).padding(horizontal = 14.dp, vertical = 9.dp))
+                    }
+                }
+                items(real.size) { i ->
+                    val m = real.asReversed()[i]
+                    Bubble(m, true, true, com.yatesv.contacthub.data.Phone.isGroupKey(key), data?.reactions?.get(m.key).orEmpty(),
+                        showTime = false, starred = false, colorOverride = 0, memberColor = null, mention = false, onClick = {}, onLong = {})
+                }
+            }
+            Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 56.dp, vertical = 10.dp)) {
+                Box(Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(20.dp)).background(MaterialTheme.colorScheme.background))
+            }
+        }
     }
 }

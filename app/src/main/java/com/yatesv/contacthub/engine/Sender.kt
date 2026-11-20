@@ -68,7 +68,8 @@ object Sender {
      * @param allowDriving false = never open Google Messages on screen (used for auto-reply and
      * background sends, so it can't take over the phone while you're using it).
      */
-    suspend fun send(ctx: Context, convKey: String, text: String, addresses: List<String> = addressesOf(convKey), allowDriving: Boolean = true): SendResult {
+    suspend fun send(ctx: Context, convKey: String, text: String, addresses: List<String> = addressesOf(convKey), allowDriving: Boolean = true,
+                     forcedHide: String? = null, skipReplyButton: Boolean = false): SendResult {
         val body = text.trim()
         if (body.isEmpty()) return SendResult(false, Route.NONE, "Empty message")
         val s = Hub.settings.value
@@ -86,7 +87,7 @@ object Sender {
         var why = ""
         if (s.engine == "auto") {
             // 1. Reply button from the Messages app notification
-            Hub.replies[convKey]?.let { h ->
+            Hub.replies[convKey]?.takeIf { !skipReplyButton }?.let { h ->
                 val ok = runCatching {
                     val intent = Intent()
                     val results = Bundle()
@@ -111,7 +112,7 @@ object Sender {
                 !MessagesAccessibility.running() -> why = "the accessibility service is off"
                 !allowDriving -> why = "no reply button from Google Messages yet"
                 else -> {
-                    val r = MessagesAccessibility.sendThrough(ctx, pkg, addresses, body)
+                    val r = MessagesAccessibility.sendThrough(ctx, pkg, addresses, body, convKey = convKey, forcedHide = forcedHide)
                     if (r.chatType.isNotEmpty()) Hub.setRcsState(convKey, r.chatType)
                     if (r.uncertain) {
                         // Send was already tapped: never fall back to SMS here, it could go out twice
@@ -183,7 +184,7 @@ object Sender {
         }
         val pkg = messagesPkg(ctx, convKey) ?: return SendResult(false, Route.NONE, "Install Google Messages to send photos")
         if (!MessagesAccessibility.running()) return SendResult(false, Route.NONE, "Turn on the Contact Hub accessibility service to send photos")
-        val r = MessagesAccessibility.sendThrough(ctx, pkg, addresses, caption, uris)
+        val r = MessagesAccessibility.sendThrough(ctx, pkg, addresses, caption, uris, convKey = convKey)
         return if (r.clicked) {
             Hub.changed(); SendResult(true, Route.MESSAGES_APP)
         } else SendResult(false, Route.NONE, "Couldn't send the photo: ${r.why}")

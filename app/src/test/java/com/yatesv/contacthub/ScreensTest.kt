@@ -99,7 +99,7 @@ class ScreensTest {
     @Test fun curveEditor() {
         Hub.settings.update { it.copy(motion = "curve") }
         show { SettingsPage("motion") }
-        rule.onNodeWithText("Your curve").assertExists()
+        rule.onNodeWithText("Editing: ").assertExists()
         Hub.settings.update { it.copy(motion = "ios") }
     }
 

@@ -48,6 +48,113 @@ class MessagesAccessibility : AccessibilityService() {
     private fun chatInput(pkg: String): AccessibilityNodeInfo? =
         pkgRoots(pkg).ifEmpty { listOfNotNull(root(pkg)) }.firstNotNullOfOrNull { findInput(all(it)) }
 
+    // ---------------- Cover: hide Google Messages while it sends ----------------
+
+    private var cover: android.view.View? = null
+    private var patch: android.view.View? = null
+    private var mirrorOwner: OverlayOwner? = null
+    private var shot: android.graphics.Bitmap? = null
+
+    /** Which hiding method to use: your pick in settings, or the one the self-test found works best. */
+    private fun method(forced: String?): String {
+        val s = Hub.settings.value
+        if (forced != null) return forced
+        if (!s.coverWhileSending || android.os.Build.VERSION.SDK_INT < 30) return "none"
+        return s.hideMethod.takeIf { it != "auto" } ?: s.hideWinner.ifBlank { "snapshot" }
+    }
+
+    private suspend fun takeShot(): android.graphics.Bitmap? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        runCatching {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(r: ScreenshotResult) {
+                    val b = runCatching { android.graphics.Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)?.copy(android.graphics.Bitmap.Config.ARGB_8888, false) }.getOrNull()
+                    r.hardwareBuffer.close()
+                    if (cont.isActive) cont.resumeWith(Result.success(b))
+                }
+                override fun onFailure(code: Int) { if (cont.isActive) cont.resumeWith(Result.success(null)) }
+            })
+        }.onFailure { if (cont.isActive) cont.resumeWith(Result.success(null)) }
+    }
+
+    private fun overlayParams(x: Int = 0, y: Int = 0, w: Int = android.view.WindowManager.LayoutParams.MATCH_PARENT, h: Int = android.view.WindowManager.LayoutParams.MATCH_PARENT) =
+        android.view.WindowManager.LayoutParams(w, h,
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            this.x = x; this.y = y
+            windowAnimations = 0
+        }
+
+    private fun addOverlay(v: android.view.View, lp: android.view.WindowManager.LayoutParams) =
+        runCatching { getSystemService(android.view.WindowManager::class.java).addView(v, lp); true }.getOrElse { HubLog.w("Cover", "overlay failed", it); false }
+
+    private fun removeView(v: android.view.View?) { if (v != null) runCatching { getSystemService(android.view.WindowManager::class.java).removeView(v) } }
+
+    /**
+     * Snapshot: a screenshot of what you're looking at (Contact Hub, keyboard and all) laid over the
+     * whole screen, so Google Messages working underneath is invisible. Touches are absorbed.
+     */
+    private suspend fun showCover(): Boolean {
+        val bmp = takeShot() ?: run { HubLog.w("Cover", "screenshot failed"); return false }
+        shot = bmp
+        val v = android.widget.ImageView(this).apply { setImageBitmap(bmp); scaleType = android.widget.ImageView.ScaleType.FIT_XY; isClickable = true }
+        return addOverlay(v, overlayParams()).also { if (it) cover = v }
+    }
+
+    /** Live mirror: an animated copy of the chat on top (your message pulses until it's sent). */
+    private fun showMirror(convKey: String): Boolean {
+        if (convKey.isBlank()) return false
+        return runCatching {
+            val (v, owner) = mirrorView(this, convKey)
+            mirrorOwner = owner
+            addOverlay(v, overlayParams()).also { if (it) cover = v }
+        }.getOrElse { HubLog.w("Cover", "mirror failed", it); false }
+    }
+
+    /** Pop-up worked: drop the full cover so Contact Hub is live, and only hide the little window. */
+    private fun shrinkCoverTo(r: android.graphics.Rect) {
+        val bmp = shot ?: return
+        val crop = runCatching {
+            android.graphics.Bitmap.createBitmap(bmp, r.left.coerceIn(0, bmp.width - 1), r.top.coerceIn(0, bmp.height - 1),
+                r.width().coerceAtMost(bmp.width - r.left.coerceAtLeast(0)).coerceAtLeast(1), r.height().coerceAtMost(bmp.height - r.top.coerceAtLeast(0)).coerceAtLeast(1))
+        }.getOrNull() ?: return
+        val v = android.widget.ImageView(this).apply { setImageBitmap(crop); scaleType = android.widget.ImageView.ScaleType.FIT_XY; isClickable = true }
+        if (addOverlay(v, overlayParams(r.left, r.top, r.width(), r.height()))) patch = v
+        removeView(cover); cover = null
+    }
+
+    /** Bounds of the Messages window, if it's on screen. */
+    private fun messagesBounds(pkg: String): android.graphics.Rect? = runCatching {
+        windows.firstOrNull { it.root?.packageName == pkg }?.let { w -> android.graphics.Rect().also { w.getBoundsInScreen(it) } }
+    }.getOrNull()
+
+    /** Last send's hiding result, for the self-test. */
+    var lastHide = ""
+
+    private suspend fun hideCover() {
+        removeView(patch); patch = null
+        mirrorOwner?.destroy(); mirrorOwner = null
+        shot = null
+        val v = cover ?: return
+        cover = null
+        // Wait until Contact Hub is really back on screen underneath, then fade the cover away
+        val t0 = System.currentTimeMillis()
+        while (System.currentTimeMillis() - t0 < 1500) {
+            if (runCatching { rootInActiveWindow?.packageName == packageName }.getOrDefault(false)) break
+            delay(50)
+        }
+        delay(60)
+        runCatching {
+            v.animate().alpha(0f).setDuration(120).withEndAction {
+                runCatching { getSystemService(android.view.WindowManager::class.java).removeView(v) }
+            }.start()
+        }.onFailure { runCatching { getSystemService(android.view.WindowManager::class.java).removeView(v) } }
+    }
+
     private fun root(pkg: String): AccessibilityNodeInfo? {
         runCatching { rootInActiveWindow?.takeIf { it.packageName == pkg }?.let { return it } }
         return runCatching { windows.mapNotNull { it.root }.firstOrNull { it.packageName == pkg } }.getOrNull()
@@ -129,7 +236,7 @@ class MessagesAccessibility : AccessibilityService() {
         }.onFailure { if (root(pkg) != null) performGlobalAction(GLOBAL_ACTION_BACK) }
     }
 
-    private fun openChat(pkg: String, addresses: List<String>, body: String?, media: List<Uri>) {
+    private fun openChat(pkg: String, addresses: List<String>, body: String?, media: List<Uri>, popup: Boolean = false) {
         val to = addresses.joinToString(";")
         val intent = if (media.isEmpty()) {
             Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$to")).apply { if (!body.isNullOrEmpty()) putExtra("sms_body", body) }
@@ -145,13 +252,45 @@ class MessagesAccessibility : AccessibilityService() {
         }
         intent.setPackage(pkg)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        startActivity(intent)
+        if (popup) {
+            // Ask for a tiny window in the bottom corner (Samsung pop-up view). If the phone ignores it, it opens full screen under the cover.
+            val m = resources.displayMetrics
+            val size = (m.widthPixels * 0.18f).toInt()
+            val opts = android.app.ActivityOptions.makeBasic().setLaunchBounds(android.graphics.Rect(m.widthPixels - size, m.heightPixels - size * 2, m.widthPixels, m.heightPixels - size))
+            intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            runCatching { startActivity(intent, opts.toBundle()) }.onFailure { startActivity(intent) }
+        } else startActivity(intent)
     }
 
-    private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>): DriveResult {
+    private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>, convKey: String, forced: String?): DriveResult {
         val want = norm(body)
+        val how = method(forced)
+        delay(150)              // let the faded "sending" bubble appear first, so it's in the snapshot
+        val covered = when (how) {
+            "mirror" -> showMirror(convKey) || showCover()
+            "snapshot", "popup" -> showCover()
+            else -> false
+        }
+        var popupOk = false
         try {
-            openChat(pkg, addresses, body, media)
+            openChat(pkg, addresses, body, media, popup = how == "popup")
+            if (how == "popup") {
+                // Did Samsung open it as a small window? Then Contact Hub can stay live.
+                val t = System.currentTimeMillis()
+                while (System.currentTimeMillis() - t < 2500) {
+                    val r = messagesBounds(pkg)
+                    if (r != null) {
+                        val m = resources.displayMetrics
+                        popupOk = r.width() * r.height() < m.widthPixels * m.heightPixels * 0.4f
+                        if (popupOk) shrinkCoverTo(r)
+                        break
+                    }
+                    delay(80)
+                }
+                HubLog.d("Cover", "pop-up window ${if (popupOk) "worked" else "not supported, opened full screen under the cover"}")
+                if (!popupOk && forced == null && Hub.settings.value.hideMethod == "auto") Hub.settings.update { it.copy(hideWinner = "snapshot") }
+            }
+            lastHide = "$how${if (how == "popup") (if (popupOk) " (small window OK)" else " (fell back to cover)") else ""}${if (!covered && how != "none") " (cover failed)" else ""}"
             val start = System.currentTimeMillis()
             var typedOurselves = false
             var type = ""
@@ -205,7 +344,13 @@ class MessagesAccessibility : AccessibilityService() {
             HubLog.w("RcsSender", "tapped Send but couldn't confirm it went (box not cleared or covered by a popup)")
             return DriveResult(false, type, "couldn't confirm it sent, check Google Messages", uncertain = true)
         } finally {
-            withContext(NonCancellable) { delay(350); backToHub(pkg) }
+            withContext(NonCancellable) {
+                if (popupOk) {
+                    // Close the little window; Contact Hub was never left
+                    repeat(3) { if (runCatching { rootInActiveWindow?.packageName == pkg }.getOrDefault(false)) { performGlobalAction(GLOBAL_ACTION_BACK); delay(150) } }
+                    hideCover()
+                } else { delay(if (covered) 120 else 350); backToHub(pkg); hideCover() }
+            }
         }
     }
 
@@ -221,8 +366,9 @@ class MessagesAccessibility : AccessibilityService() {
         "😡" to listOf("angry", "pouting"), "‼️" to listOf("exclamation", "emphasize"), "❓" to listOf("question"),
     )
 
-    private suspend fun doReact(pkg: String, addresses: List<String>, body: String, emoji: String, knownType: String): DriveResult {
+    private suspend fun doReact(pkg: String, addresses: List<String>, body: String, emoji: String, knownType: String, convKey: String): DriveResult {
         val want = norm(body)
+        val covered = when (method(null)) { "mirror" -> showMirror(convKey) || showCover(); "none" -> false; else -> showCover() }
         try {
             openChat(pkg, addresses, null, emptyList())
             val start = System.currentTimeMillis()
@@ -269,7 +415,7 @@ class MessagesAccessibility : AccessibilityService() {
             performGlobalAction(GLOBAL_ACTION_BACK) // close the menu we opened
             return DriveResult(false, type, "that reaction isn't in Messages' quick reactions")
         } finally {
-            withContext(NonCancellable) { delay(350); backToHub(pkg) }
+            withContext(NonCancellable) { delay(if (covered) 120 else 350); backToHub(pkg); hideCover() }
         }
     }
 
@@ -286,19 +432,22 @@ class MessagesAccessibility : AccessibilityService() {
             return flat.split(':').any { it.equals(me, ignoreCase = true) || it.equals(short, ignoreCase = true) }
         }
 
-        suspend fun sendThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, media: List<Uri> = emptyList()): DriveResult =
+        suspend fun sendThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, media: List<Uri> = emptyList(),
+                                convKey: String = "", forcedHide: String? = null): DriveResult =
             lock.withLock {
                 val svc = instance ?: return DriveResult(false, why = "Accessibility service is off")
                 withContext(Dispatchers.Main) {
-                    runCatching { svc.doSend(pkg, addresses, body, media) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
+                    runCatching { svc.doSend(pkg, addresses, body, media, convKey, forcedHide) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
                 }
             }
+
+        fun lastHideResult() = instance?.lastHide.orEmpty()
 
         suspend fun reactThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, emoji: String, convKey: String): DriveResult =
             lock.withLock {
                 val svc = instance ?: return DriveResult(false, why = "Accessibility service is off")
                 withContext(Dispatchers.Main) {
-                    runCatching { svc.doReact(pkg, addresses, body, emoji, Hub.rcsState(convKey)) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
+                    runCatching { svc.doReact(pkg, addresses, body, emoji, Hub.rcsState(convKey), convKey) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
                 }
             }
     }

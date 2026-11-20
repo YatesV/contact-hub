@@ -234,9 +234,9 @@ private fun AnimatedContentTransitionScope<Screen>.screenTransition(s: com.yates
     if (!Motion.enabled(s)) return fadeIn(snap()) togetherWith fadeOut(snap())
     val p = Motion.params(s)
     // Pages shouldn't wobble sideways, so slides use a calmer version of the spring
-    val offset: androidx.compose.animation.core.FiniteAnimationSpec<IntOffset> = p?.let { spring(it.damping.coerceAtLeast(0.9f), it.stiffness) } ?: Motion.spec(s)
-    val fade: androidx.compose.animation.core.FiniteAnimationSpec<Float> = p?.let { spring(1f, it.stiffness) } ?: Motion.spec(s)
-    val scale: androidx.compose.animation.core.FiniteAnimationSpec<Float> = Motion.spec(s)
+    val offset: androidx.compose.animation.core.FiniteAnimationSpec<IntOffset> = p?.let { spring(it.damping.coerceAtLeast(0.9f), it.stiffness) } ?: Motion.spec(Motion.Cat.PAGES, s)
+    val fade: androidx.compose.animation.core.FiniteAnimationSpec<Float> = p?.let { spring(1f, it.stiffness) } ?: Motion.spec(Motion.Cat.PAGES, s)
+    val scale: androidx.compose.animation.core.FiniteAnimationSpec<Float> = Motion.spec(Motion.Cat.PAGES, s)
     return when (s.transition) {
         "fade" -> fadeIn(fade) togetherWith fadeOut(fade)
         "zoom" -> (scaleIn(scale, 0.92f) + fadeIn(fade)) togetherWith (scaleOut(scale, 1.05f) + fadeOut(fade))

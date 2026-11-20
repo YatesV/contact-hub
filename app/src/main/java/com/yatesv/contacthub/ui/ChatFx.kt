@@ -24,6 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.HorizontalDivider
@@ -99,7 +104,9 @@ fun PopIn(key: String, content: @Composable () -> Unit) {
 fun IosMessageMenu(
     m: Msg, rect: Rect?, isStarred: Boolean, bubble: Color, bubbleText: Color,
     onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit,
+    onSelect: () -> Unit = {}, onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = {},
 ) {
+    val links = remember(m.body) { com.yatesv.contacthub.data.Links.find(m.body).distinctBy { it.target }.take(2) }
     val appear = remember { Animatable(0f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, if (Hub.settings.value.motion == "curve") Motion.spec(Motion.Cat.MENUS) else Motion.popSpec()) }
     val style = LocalChatStyle.current
@@ -115,7 +122,7 @@ fun IosMessageMenu(
             val screenW = with(density) { maxWidth.toPx() }
             val barH = with(density) { 56.dp.toPx() }
             val gap = with(density) { 10.dp.toPx() }
-            val menuH = with(density) { (if (Otp.find(m.body) != null) 160.dp else 116.dp).toPx() }
+            val menuH = with(density) { ((if (Otp.find(m.body) != null) 160.dp else 116.dp) + 45.dp * (links.size + if (m.body.isNotBlank()) 1 else 0)).toPx() }
             val r = rect ?: Rect(screenW * 0.2f, screenH * 0.4f, screenW * 0.8f, screenH * 0.4f + 120f)
             val bubbleH = r.height.coerceAtMost(screenH * 0.35f)
             // Shift everything so the reactions and the menu both fit on screen
@@ -158,7 +165,12 @@ fun IosMessageMenu(
                     .graphicsLayer { scaleX = appear.value; scaleY = appear.value; alpha = appear.value; transformOrigin = TransformOrigin(if (alignRight) 1f else 0f, 0f) },
             ) {
                 Column {
+                    links.forEach { l ->
+                        MenuItem(linkLabel(l), linkIcon(l)) { onLink(l) }
+                        HorizontalDivider()
+                    }
                     MenuItem("Copy", Icons.Default.ContentCopy) { onCopy(m.body) }
+                    if (m.body.isNotBlank()) { HorizontalDivider(); MenuItem("Select text", Icons.Default.TextFields) { onSelect() } }
                     Otp.find(m.body)?.let { code -> HorizontalDivider(); MenuItem("Copy code $code", Icons.Default.Key) { onCopy(code) } }
                     HorizontalDivider()
                     MenuItem(if (isStarred) "Unstar" else "Star", if (isStarred) Icons.Default.StarBorder else Icons.Default.Star) { onStar(!isStarred) }
@@ -172,10 +184,25 @@ fun IosMessageMenu(
     }
 }
 
+/** "Open example.com", "Call (337) 555-0101", ... */
+fun linkLabel(l: com.yatesv.contacthub.data.Links.Link): String = when (l.kind) {
+    com.yatesv.contacthub.data.Links.Kind.URL -> "Open " + l.text.removePrefix("https://").removePrefix("http://").removePrefix("www.").take(28)
+    com.yatesv.contacthub.data.Links.Kind.EMAIL -> "Email " + l.text.take(28)
+    com.yatesv.contacthub.data.Links.Kind.PHONE -> "Call or text " + com.yatesv.contacthub.data.Phone.pretty(l.text)
+    com.yatesv.contacthub.data.Links.Kind.GEO -> "Open in Maps"
+}
+
+fun linkIcon(l: com.yatesv.contacthub.data.Links.Link): ImageVector = when (l.kind) {
+    com.yatesv.contacthub.data.Links.Kind.URL -> Icons.Default.Link
+    com.yatesv.contacthub.data.Links.Kind.EMAIL -> Icons.Default.Email
+    com.yatesv.contacthub.data.Links.Kind.PHONE -> Icons.Default.Call
+    com.yatesv.contacthub.data.Links.Kind.GEO -> Icons.Default.Map
+}
+
 @Composable
 private fun MenuItem(label: String, icon: ImageVector, onClick: () -> Unit) {
     Row(Modifier.clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f))
+        Text(label, Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -204,6 +204,10 @@ fun ChatScreen(key: String) {
     var typing by remember { mutableStateOf(false) }
     val starred by dao.starredFlow().collectAsState(emptyList())
     val addresses = Sender.addressesOf(key)
+    /** Every person in this chat is a saved contact (link previews load automatically) */
+    val knownChat = addresses.isNotEmpty() && addresses.all { Hub.contacts.cached(it) != null }
+    var phoneTap by remember { mutableStateOf<String?>(null) }
+    var selectText by remember { mutableStateOf<String?>(null) }
     val isGroup = Phone.isGroupKey(key)
     val name = InboxData.nameFor(key, addresses, meta, group?.name)
     val chatType = Hub.rcsState(key)
@@ -397,6 +401,12 @@ fun ChatScreen(key: String) {
                                 onDouble = { Haptics.confirm(view); reactTo(m, settings.doubleTapEmoji) },
                                 doubleEmoji = settings.doubleTapEmoji,
                                 onBounds = { bounds[m.key] = it },
+                                allowPreview = when (settings.linkPreviews) {
+                                    "all" -> true
+                                    "contacts" -> m.outgoing || knownChat || (isGroup && Hub.contacts.cached(m.sender) != null)
+                                    else -> false
+                                },
+                                onPhone = { phoneTap = it },
                             ) }
                             }
                             }
@@ -487,15 +497,22 @@ fun ChatScreen(key: String) {
             scope.launch { if (on) dao.star(Starred(m.key, key, m.body, m.date)) else dao.unstar(m.key) }
         }
         val onCopy: (String) -> Unit = { s -> selected = null; copy(ctx, s); Haptics.tap(view) }
+        val onSelect: () -> Unit = { selected = null; selectText = m.body }
+        val onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = { l ->
+            selected = null
+            if (l.kind == com.yatesv.contacthub.data.Links.Kind.PHONE) phoneTap = l.text else openLink(ctx, l)
+        }
         if (settings.menuStyle == "ios") {
             IosMessageMenu(m, bounds[m.key], isStarred, if (m.outgoing && meta.bubbleColor != 0) Color(meta.bubbleColor.toLong() and 0xFFFFFFFFL)
                 else if (m.outgoing) style.sent else style.recv,
                 if (m.outgoing) style.sentText else style.recvText,
-                onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy)
+                onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink)
         } else {
-            MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy)
+            MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink)
         }
     }
+    phoneTap?.let { n -> PhoneActions(n) { phoneTap = null } }
+    selectText?.let { t -> SelectTextDialog(t) { selectText = null } }
 
     failedTap?.let { f ->
         AlertDialog(
@@ -560,6 +577,9 @@ internal fun Bubble(
     onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
     onDouble: (() -> Unit)? = null,
     doubleEmoji: String = "❤️",
+    /** Load a title + picture for the first link */
+    allowPreview: Boolean = false,
+    onPhone: (String) -> Unit = {},
 ) {
     // Double-tap effect: bubble bounces, a big emoji pops, and little dots burst out
     var bursts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -618,9 +638,13 @@ internal fun Bubble(
                         contentScale = ContentScale.Crop)
                 }
                 if (m.body.isNotBlank()) {
-                    Text(m.body, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
+                    LinkText(m.body, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
                         fontSize = if (emojiOnly) (16 * style.emojiScale * 1.5f).sp else 16.sp,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), onPhone = onPhone)
+                    if (allowPreview && !emojiOnly) {
+                        val url = remember(m.body) { com.yatesv.contacthub.data.Links.firstUrl(m.body) }
+                        if (url != null) LinkPreviewCard(url, fg)
+                    }
                 }
                 if (otp != null) TextButton({ copy(ctx, otp) }, Modifier.padding(start = 6.dp)) { Text("Copy code $otp", color = fg, fontWeight = FontWeight.SemiBold) }
             }
@@ -671,7 +695,8 @@ internal fun Bubble(
 }
 
 @Composable
-private fun MessageActions(m: Msg, isStarred: Boolean, onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit) {
+private fun MessageActions(m: Msg, isStarred: Boolean, onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit,
+                           onSelect: () -> Unit = {}, onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = {}) {
     AlertDialog(
         onDismissRequest = onDismiss,
         text = {
@@ -684,7 +709,9 @@ private fun MessageActions(m: Msg, isStarred: Boolean, onDismiss: () -> Unit, on
                 Spacer(Modifier.size(8.dp))
                 Text(m.body.take(200), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.size(8.dp))
+                com.yatesv.contacthub.data.Links.find(m.body).distinctBy { it.target }.take(3).forEach { l -> TextButton({ onLink(l) }) { Text(linkLabel(l)) } }
                 TextButton({ onCopy(m.body) }) { Text("Copy text") }
+                if (m.body.isNotBlank()) TextButton(onSelect) { Text("Select text") }
                 Otp.find(m.body)?.let { code -> TextButton({ onCopy(code) }) { Text("Copy code $code") } }
                 TextButton({ onStar(!isStarred) }) { Text(if (isStarred) "Unstar" else "Star") }
                 Text(fullTime(m.date) + (if (m.rcs) " · RCS" else ""), style = MaterialTheme.typography.labelSmall,

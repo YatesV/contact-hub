@@ -285,6 +285,10 @@ private fun MessagingPage() {
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("Reactions")
     SwitchRow("Turn \"Liked …\" texts into reactions", "When iPhone or SMS contacts react, show a real reaction instead of the text", s.convertReactions) { v -> set { it.copy(convertReactions = v) } }
+    SectionTitle("Links")
+    ChoiceRow("Link previews", listOf("all" to "Everyone", "contacts" to "Saved contacts only", "off" to "Off"), s.linkPreviews) { v -> set { it.copy(linkPreviews = v) } }
+    Text("Shows a title and picture under links. Loading a preview opens the link's website from your phone, so \"Saved contacts only\" skips links from unknown numbers (often spam). Links are always tappable.",
+        Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("Double-tap")
     ChoiceRow("Double-tap a message to react with", com.yatesv.contacthub.data.Reactions.picker.map { it to it }, s.doubleTapEmoji) { v -> set { it.copy(doubleTapEmoji = v) } }
     Text("Double-tap again to remove it. Sent over RCS in the background, never as a text.",

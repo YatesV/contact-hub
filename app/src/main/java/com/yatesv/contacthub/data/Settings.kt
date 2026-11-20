@@ -42,6 +42,7 @@ data class Settings(
     val hideWinner: String = "",               // best method found by the self-test on this phone
     val doubleTapEmoji: String = "❤️",
     val convertReactions: Boolean = true,
+    val linkPreviews: String = "contacts",  // all, contacts (saved contacts + you + groups), off
     val olderThan6Months: Boolean = false,
     val autoReplyOn: Boolean = false,
     val autoReplyText: String = "Can't text right now, I'll get back to you soon.",
@@ -105,7 +106,7 @@ data class Settings(
         put("sendOnEnter", sendOnEnter); put("showCategories", showCategories); put("navLabels", navLabels); put("startTab", startTab)
         put("engine", engine); put("handleNotifications", handleNotifications); put("coverWhileSending", coverWhileSending);
         put("hideMethod", hideMethod); put("hideWinner", hideWinner); put("doubleTapEmoji", doubleTapEmoji)
-        put("curveOverrides", curveOverrides); put("savedCurves", savedCurves); put("curveSnap", curveSnap); put("convertReactions", convertReactions)
+        put("curveOverrides", curveOverrides); put("savedCurves", savedCurves); put("curveSnap", curveSnap); put("convertReactions", convertReactions); put("linkPreviews", linkPreviews)
         put("olderThan6Months", olderThan6Months); put("autoReplyOn", autoReplyOn); put("autoReplyText", autoReplyText); put("myName", myName)
         put("appLock", appLock); put("useBiometric", useBiometric); put("pinHash", pinHash); put("lockAfterSec", lockAfterSec)
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
@@ -137,7 +138,7 @@ data class Settings(
                 hideMethod = j.optString("hideMethod", "auto"), hideWinner = j.optString("hideWinner", ""),
                 doubleTapEmoji = j.optString("doubleTapEmoji", "❤️"), curveOverrides = j.optString("curveOverrides", "{}"),
                 savedCurves = j.optString("savedCurves", "[]"), curveSnap = j.optBoolean("curveSnap", false),
-                convertReactions = j.optBoolean("convertReactions", true), olderThan6Months = j.optBoolean("olderThan6Months", false),
+                convertReactions = j.optBoolean("convertReactions", true), linkPreviews = j.optString("linkPreviews", "contacts"), olderThan6Months = j.optBoolean("olderThan6Months", false),
                 autoReplyOn = j.optBoolean("autoReplyOn", false), autoReplyText = j.optString("autoReplyText", d.autoReplyText), myName = j.optString("myName", ""),
                 appLock = j.optBoolean("appLock", false), useBiometric = j.optBoolean("useBiometric", true),
                 pinHash = j.optString("pinHash", ""), lockAfterSec = j.optInt("lockAfterSec", 30),

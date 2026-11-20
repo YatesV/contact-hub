@@ -64,6 +64,7 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             HubApp.scheduleWork(ctx)
             ScheduleWorker.enqueue(ctx, 0)
+            MockStore.onBoot(ctx)
         }
     }
 }

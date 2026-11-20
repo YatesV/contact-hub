@@ -3,6 +3,8 @@ name: Build APK
 on:
   push:
     branches: [main]
+  # PRs get tested and built too, but don't replace the "latest" APK
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -38,6 +40,7 @@ jobs:
       # Fixed link you can open on your phone:
       # https://github.com/YatesV/contact-hub/releases/latest/download/ContactHub.apk
       - name: Publish to "latest" release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

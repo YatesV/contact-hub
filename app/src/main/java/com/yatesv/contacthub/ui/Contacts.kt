@@ -384,6 +384,8 @@ private fun SocialButton(s: Social, stored: String, onAdd: () -> Unit) {
 @Composable
 private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, onOpen: () -> Unit, onRefresh: () -> Unit, onLink: () -> Unit, onSetup: () -> Unit) {
     if (m?.lat != null && m.lng != null) {
+        val mockSt by com.yatesv.contacthub.engine.MockStore.state.collectAsState()
+        val mockHere = mockSt.here.takeIf { mockSt.active }
         val mapRef = remember { arrayOfNulls<MapView>(1) }
         androidx.compose.runtime.DisposableEffect(Unit) { onDispose { mapRef[0]?.onDetach() } }
         Box {
@@ -402,6 +404,15 @@ private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, 
                 map.controller.setCenter(p)
                 map.overlays.removeAll { it is Marker }
                 map.overlays.add(Marker(map).apply { position = p; title = m.place.ifBlank { m.address }; setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM) })
+                // You, at your mock location
+                mockHere?.let { y -> map.overlays.add(Marker(map).apply {
+                    position = GeoPoint(y.lat, y.lng); title = "You"; setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    icon = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(android.graphics.Color.rgb(10, 132, 255))
+                        val d = map.context.resources.displayMetrics.density
+                        setStroke((2.5f * d).toInt(), android.graphics.Color.WHITE); setSize((16 * d).toInt(), (16 * d).toInt())
+                    }
+                }) }
                 map.invalidate()
             },
             modifier = Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(12.dp)),
@@ -413,8 +424,11 @@ private fun Life360Card(m: L360Member?, signedIn: Boolean, refreshing: Boolean, 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                // While a mock location is running, you're shown at the mock spot
+                val mock = mockHere
                 val me = Hub.l360.me()
-                val dist = if (me?.lat != null && me.lng != null) Geo.miles(me.lat, me.lng, m.lat, m.lng) else null
+                val dist = if (mock != null) Geo.miles(mock.lat, mock.lng, m.lat, m.lng)
+                    else if (me?.lat != null && me.lng != null) Geo.miles(me.lat, me.lng, m.lat, m.lng) else null
                 Text(listOfNotNull(m.place.ifBlank { m.address.ifBlank { null } }, dist?.let { "%.1f mi away".format(it) }, if (m.driving) "Driving" else null)
                     .joinToString(" · ").ifBlank { "Location shared" }, fontWeight = FontWeight.SemiBold)
                 Text("Updated ${Geo.ago(m.updated)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -107,7 +107,7 @@ fun SettingsHome() {
             }
             SettingsGroup {
                 SettingRow("Privacy & data", "What's stored, what leaves your phone, delete everything", Icons.Default.Shield, onClick = { Nav.go(Screen.SettingsPage("privacydata")) })
-                SettingRow("Developer", "Full self-test, activity log (.txt)", Icons.Default.BugReport, onClick = { Nav.go(Screen.SettingsPage("developer")) })
+                SettingRow("Developer", "Mock location, full self-test, activity log (.txt)", Icons.Default.BugReport, onClick = { Nav.go(Screen.SettingsPage("developer")) })
                 SettingRow("About & updates", "Build ${BuildConfig.VERSION_CODE}", Icons.Default.Info, onClick = { Nav.go(Screen.SettingsPage("about")) })
                 SettingRow("Open-source licenses", null, Icons.Default.Description, onClick = { Nav.go(Screen.SettingsPage("licenses")) })
             }

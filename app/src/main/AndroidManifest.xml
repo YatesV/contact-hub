@@ -26,6 +26,14 @@
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
+    <!-- Mock location: lets Contact Hub show up in Developer options → Select mock location app -->
+    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" tools:ignore="MockLocation,ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!-- Lets the app see whether Google / Samsung Messages and the social apps are installed -->
@@ -148,6 +156,28 @@
         </service>
 
         <receiver android:name=".engine.ActionReceiver" android:exported="false" />
+
+        <!-- Mock location -->
+        <service
+            android:name=".engine.MockService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Feeds a user-chosen test location to Android's mock location providers (developer tool)" />
+        </service>
+        <service
+            android:name=".engine.MockTile"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="Mock location"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <receiver android:name=".engine.MockAlarmReceiver" android:exported="false" />
 
         <!-- Contact Hub mode (default texting app) -->
         <receiver

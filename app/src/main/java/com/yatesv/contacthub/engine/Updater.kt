@@ -21,25 +21,81 @@ import java.net.URL
 object Updater {
     private const val API = "https://api.github.com/repos/YatesV/contact-hub/releases/latest"
     private const val APK = "https://github.com/YatesV/contact-hub/releases/latest/download/ContactHub.apk"
+    /** Tiny file published with every build. Normal download link, so no GitHub API limits. */
+    private const val VERSION = "https://github.com/YatesV/contact-hub/releases/latest/download/version.json"
 
-    data class State(val latest: Int = 0, val available: Boolean = false, val progress: Float = -1f, val error: String = "")
+    data class State(
+        val latest: Int = 0,
+        val available: Boolean = false,
+        val progress: Float = -1f,
+        val error: String = "",
+        val checking: Boolean = false,
+        val checkedAt: Long = 0,
+    )
     val state = MutableStateFlow(State())
 
     /** Build number in the release title, e.g. "Orbit build #12" -> 12. */
     fun buildNumber(title: String): Int = Regex("#(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-    suspend fun check(force: Boolean = false): State = withContext(Dispatchers.IO) {
-        val s = Hub.settings.value
-        if (!force && System.currentTimeMillis() - s.lastUpdateCheck < 6 * 3600_000L) return@withContext state.value
-        runCatching {
-            val c = (URL(API).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10000; readTimeout = 10000; setRequestProperty("Accept", "application/vnd.github+json")
+    private class HttpError(val code: Int) : Exception("HTTP $code")
+
+    private fun get(url: String): String {
+        var u = URL(url)
+        repeat(6) {
+            val c = (u.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 15000; useCaches = false
+                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("User-Agent", "Orbit-Android/${BuildConfig.VERSION_CODE}")
+                setRequestProperty("Accept", "application/vnd.github+json, application/json, */*")
             }
-            val j = JSONObject(c.inputStream.bufferedReader().readText())
-            val latest = buildNumber(j.optString("name"))
+            try {
+                val code = c.responseCode
+                if (code in 300..399) { u = URL(u, c.getHeaderField("Location") ?: throw HttpError(code)); return@repeat }
+                if (code != 200) throw HttpError(code)
+                return c.inputStream.bufferedReader().use { it.readText() }
+            } finally { c.disconnect() }
+        }
+        throw HttpError(310)
+    }
+
+    /** Newest build number: version.json first, then the GitHub API (older releases didn't have the file). */
+    private fun fetchLatest(): Int {
+        var last: Throwable? = null
+        repeat(2) { attempt ->
+            runCatching { return JSONObject(get(VERSION + "?t=" + System.currentTimeMillis())).getInt("build") }.onFailure { last = it }
+            runCatching { return buildNumber(JSONObject(get(API)).optString("name")).also { if (it == 0) error("no build number") } }.onFailure { if (last !is java.net.UnknownHostException) last = it }
+            if (attempt == 0) Thread.sleep(2500)
+        }
+        throw last ?: IllegalStateException("unknown")
+    }
+
+    private fun explain(e: Throwable): String = when {
+        e is java.net.UnknownHostException || e is java.net.ConnectException -> "No internet connection. Try again when you're online."
+        e is java.net.SocketTimeoutException -> "GitHub took too long to answer. Try again."
+        e is HttpError && e.code == 404 -> "A new build is being published right now. Try again in a minute."
+        e is HttpError && (e.code == 403 || e.code == 429) -> "GitHub is limiting checks from this network. Try again in a few minutes."
+        else -> "Couldn't check for updates (${e.message ?: e.javaClass.simpleName})"
+    }
+
+    @Volatile private var running = false
+
+    suspend fun check(force: Boolean = false): State = withContext(Dispatchers.IO) {
+        if (running) return@withContext state.value
+        // Without force, check at most every 30 minutes — but always once per app launch
+        if (!force && state.value.checkedAt > 0 && System.currentTimeMillis() - state.value.checkedAt < 30 * 60_000L) return@withContext state.value
+        running = true
+        state.value = state.value.copy(checking = true, error = "")
+        val result = try {
+            val latest = fetchLatest()
             Hub.settings.update { it.copy(lastUpdateCheck = System.currentTimeMillis()) }
-            State(latest, latest > BuildConfig.VERSION_CODE)
-        }.getOrElse { State(error = "Couldn't check for updates") }.also { state.value = it }
+            state.value.copy(latest = latest, available = latest > BuildConfig.VERSION_CODE, checking = false, error = "", checkedAt = System.currentTimeMillis())
+        } catch (e: Throwable) {
+            HubLog.w("Update", "check failed", e)
+            // Keep what we already knew (e.g. an update found earlier) and just show why this check failed
+            state.value.copy(checking = false, error = if (force) explain(e) else "")
+        } finally { running = false }
+        state.value = result
+        result
     }
 
     fun canInstall(ctx: Context) = ctx.packageManager.canRequestPackageInstalls()
@@ -56,10 +112,12 @@ object Updater {
             var conn: HttpURLConnection
             // Follow GitHub's redirects to the file
             while (true) {
-                conn = (url.openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 30000 }
+                conn = (url.openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 30000; useCaches = false
+                    setRequestProperty("User-Agent", "Orbit-Android/${BuildConfig.VERSION_CODE}") }
                 if (conn.responseCode in 300..399) { url = URL(url, conn.getHeaderField("Location")); continue }
                 break
             }
+            if (conn.responseCode == 404) error("the new build is still being published. Try again in a minute.")
             if (conn.responseCode != 200) error("download returned ${conn.responseCode}")
             val total = conn.contentLengthLong
             val installer = ctx.packageManager.packageInstaller

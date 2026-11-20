@@ -410,14 +410,18 @@ fun UpdateCard() {
     val st by Updater.state.collectAsState()
     val s by Hub.settings.flow.collectAsState()
     SettingRow("Version", "Build ${BuildConfig.VERSION_CODE}" + when {
+        st.checking -> " · checking…"
         st.available -> " · build ${st.latest} is ready"
-        st.latest > 0 -> " · up to date"
+        st.latest > 0 -> " · newest build"
         else -> ""
     })
     if (st.progress in 0f..0.999f) LinearProgressIndicator({ st.progress }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
     if (st.error.isNotBlank()) Text(st.error, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
     Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton({ scope.launch { Updater.check(force = true) } }) { Text("Check now") }
+        OutlinedButton({ scope.launch {
+            val r = Updater.check(force = true)
+            if (r.error.isBlank() && !r.available && r.latest > 0) Hub.banner.value = "You're on the newest build"
+        } }, enabled = !st.checking) { Text(if (st.checking) "Checking…" else "Check now") }
         if (st.available) Button({
             if (!Updater.canInstall(ctx)) ctx.startActivity(Updater.allowInstallsIntent(ctx))
             else Hub.scope.launch { Updater.install(ctx) }

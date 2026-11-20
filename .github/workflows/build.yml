@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# Two quick pushes: finish one release at a time
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -47,10 +52,20 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ github.run_number }}
         run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest Orbit.apk ContactHub.apk \
-            --target "${{ github.sha }}" \
-            --title "Orbit build #${{ github.run_number }}" \
-            --notes "Download **Orbit.apk** below and open it on your phone to install. Updates install over the old version and keep your data." \
-            --latest
+          echo "{\"build\": $BUILD, \"sha\": \"${{ github.sha }}\"}" > version.json
+          TITLE="Orbit build #$BUILD"
+          NOTES="Download **Orbit.apk** below and open it on your phone to install. Updates install over the old version and keep your data."
+          if gh release view latest >/dev/null 2>&1; then
+            # Replace the files in place (never delete the release, so update checks keep working mid-publish).
+            # APKs first, version.json last, so phones only see the new build once its APK is there.
+            gh release upload latest Orbit.apk ContactHub.apk --clobber
+            gh release upload latest version.json --clobber
+            gh release edit latest --title "$TITLE" --notes "$NOTES" --latest
+            git tag -f latest "${{ github.sha }}"
+            git push -f origin refs/tags/latest || true
+          else
+            gh release create latest Orbit.apk ContactHub.apk version.json \
+              --target "${{ github.sha }}" --title "$TITLE" --notes "$NOTES" --latest
+          fi

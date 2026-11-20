@@ -6,6 +6,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -148,15 +149,23 @@ private fun ToggleButton(icon: ImageVector, label: String, on: Boolean, onClick:
     }
 }
 
+/** Round dial pad keys with letters under the numbers. */
 @Composable
 fun Keypad(onKey: (Char) -> Unit) {
-    val rows = listOf("123", "456", "789", "*0#")
-    Column {
-        rows.forEach { r ->
+    val letters = mapOf('2' to "ABC", '3' to "DEF", '4' to "GHI", '5' to "JKL", '6' to "MNO", '7' to "PQRS", '8' to "TUV", '9' to "WXYZ", '0' to "+")
+    val view = androidx.compose.ui.platform.LocalView.current
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        listOf("123", "456", "789", "*0#").forEach { r ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 r.forEach { ch ->
-                    androidx.compose.material3.TextButton({ onKey(ch) }, Modifier.size(72.dp)) {
-                        Text(ch.toString(), fontSize = 28.sp, color = MaterialTheme.colorScheme.onSurface)
+                    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Column(
+                        Modifier.size(76.dp).then(com.yatesv.contacthub.ui.pressScaleModifier(src)).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable(src, androidx.compose.material3.ripple()) { com.yatesv.contacthub.ui.Haptics.tap(view); onKey(ch) },
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(ch.toString(), fontSize = 32.sp, color = MaterialTheme.colorScheme.onSurface)
+                        letters[ch]?.let { Text(it, fontSize = 10.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
             }

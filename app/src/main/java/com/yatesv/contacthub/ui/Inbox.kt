@@ -13,6 +13,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -90,6 +98,9 @@ data class ConvRow(
 )
 
 object InboxData {
+    /** Last inbox, shown instantly while it refreshes. */
+    @Volatile var cache: List<ConvRow>? = null
+
     private val installTime by lazy {
         runCatching { Hub.app.packageManager.getPackageInfo(Hub.app.packageName, 0).firstInstallTime }.getOrDefault(0L)
     }
@@ -169,14 +180,17 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
     val banner by Hub.banner.collectAsState()
     val l360Status by Hub.l360.status.collectAsState()
     val folders by Hub.db.dao().foldersFlow().collectAsState(emptyList())
-    var rows by remember { mutableStateOf<List<ConvRow>?>(null) }
+    var rows by remember { mutableStateOf(InboxData.cache) }
     var filter by remember { mutableStateOf("all") }
     var menu by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<ConvRow?>(null) }
     var folderFor by remember { mutableStateOf<ConvRow?>(null) }
     val view = androidx.compose.ui.platform.LocalView.current
 
-    LaunchedEffect(version, settings.olderThan6Months) { rows = runCatching { InboxData.load() }.getOrDefault(emptyList()) }
+    LaunchedEffect(version, settings.olderThan6Months) {
+        if (rows != null) kotlinx.coroutines.delay(150)
+        rows = runCatching { InboxData.load() }.getOrDefault(rows ?: emptyList()).also { InboxData.cache = it }
+    }
 
     val visible = rows.orEmpty().filter { r ->
         when (mode) {
@@ -192,16 +206,23 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         }
     }
 
+    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val pinned = if (mode == InboxMode.NORMAL && filter == "all") visible.filter { it.meta.pinned } else emptyList()
+    val list = visible.filter { it !in pinned }
     Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text(when (mode) { InboxMode.HIDDEN -> "Hidden chats"; InboxMode.ARCHIVED -> "Archived"; else -> "Messages" }) },
+            LargeTopAppBar(
+                title = { Text(when (mode) { InboxMode.HIDDEN -> "Hidden"; InboxMode.ARCHIVED -> "Archived"; else -> "Messages" }) },
                 navigationIcon = { if (mode != InboxMode.NORMAL) IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                scrollBehavior = scroll,
+                colors = TopAppBarDefaults.largeTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.96f)),
                 actions = {
                     if (mode == InboxMode.NORMAL) {
-                        IconButton({ Nav.go(Screen.Search) }) { Icon(Icons.Default.Search, "Search") }
                         Box {
-                            IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }
+                            IconButton({ menu = true }) { Icon(Icons.Default.MoreHoriz, "More") }
                             DropdownMenu(menu, { menu = false }) {
                                 DropdownMenuItem({ Text("Archived") }, { menu = false; Nav.go(Screen.Archived) }, leadingIcon = { Icon(Icons.Default.Archive, null) })
                                 DropdownMenuItem({ Text("Starred messages") }, { menu = false; Nav.go(Screen.Starred) }, leadingIcon = { Icon(Icons.Default.Star, null) })
@@ -213,48 +234,51 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                                 DropdownMenuItem({ Text("New folder") }, { menu = false; folderFor = ConvRow("", 0, emptyList(), "", null, "", 0, false, ConvMeta(""), Category.ALL, false) })
                             }
                         }
+                        IconButton({ Nav.go(Screen.NewChat) }) { Icon(Icons.Default.EditNote, "New message", tint = MaterialTheme.colorScheme.primary) }
                     }
                 },
             )
-        },
-        floatingActionButton = {
-            if (mode == InboxMode.NORMAL) ExtendedFloatingActionButton(onClick = { Nav.go(Screen.NewChat) }, icon = { Icon(Icons.Default.Edit, null) }, text = { Text("Start chat") })
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             if (mode == InboxMode.NORMAL) UpdateBanner()
             androidx.compose.animation.AnimatedVisibility(banner.isNotBlank()) { Banner(banner) { Hub.banner.value = "" } }
             if (l360Status.isNotBlank() && mode == InboxMode.NORMAL) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) {}
-            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected) {
-                Banner("Turn on notification access so RCS chats and replies work.", "Open", {
-                    ctx.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }) { Hub.banner.value = "" }
-            }
-            if (mode == InboxMode.NORMAL && settings.showCategories) {
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Category.entries.forEach { c ->
-                        val id = if (c == Category.ALL) "all" else c.name
-                        val count = if (c == Category.ALL) 0 else rows.orEmpty().count { it.category == c && it.unread && !it.meta.hidden && !it.meta.archived }
-                        FilterChip(filter == id, { filter = id }, { Text(if (count > 0) "${c.label} $count" else c.label) })
-                    }
-                    folders.forEach { f -> FilterChip(filter == "f:${f.id}", { filter = "f:${f.id}" }, { Text("📁 ${f.name}") }) }
-                }
+            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected && !com.yatesv.contacthub.engine.HubSms.isDefault(ctx)) {
+                Banner("Turn on notification access so RCS chats and replies work.", "Open", { openListener(ctx) }) { Hub.banner.value = "" }
             }
             when {
                 rows == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.material3.CircularProgressIndicator() }
-                visible.isEmpty() -> EmptyState(Icons.Default.ChatBubbleOutline, "Nothing here", when (mode) {
-                    InboxMode.HIDDEN -> "Long-press a chat and pick Hide to move it here."
-                    InboxMode.ARCHIVED -> "Archived chats show up here."
-                    else -> "Your conversations will show up here."
-                })
                 else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(visible, key = { it.key }) { r ->
+                    if (mode == InboxMode.NORMAL) item(key = "search") { SearchPill { Nav.go(Screen.Search) } }
+                    if (mode == InboxMode.NORMAL && settings.showCategories) item(key = "chips") {
+                        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Category.entries.forEach { c ->
+                                val id = if (c == Category.ALL) "all" else c.name
+                                val count = if (c == Category.ALL) 0 else rows.orEmpty().count { it.category == c && it.unread && !it.meta.hidden && !it.meta.archived }
+                                Pill(if (count > 0) "${c.label} $count" else c.label, filter == id) { filter = id }
+                            }
+                            folders.forEach { f -> Pill(f.name, filter == "f:${f.id}") { filter = "f:${f.id}" } }
+                        }
+                    }
+                    if (pinned.isNotEmpty()) item(key = "pinned") {
+                        PinnedGrid(pinned, onOpen = { Nav.go(Screen.Chat(it.key)) }, onLong = { Haptics.long(view); actionsFor = it })
+                    }
+                    if (list.isEmpty() && pinned.isEmpty()) item(key = "empty") {
+                        EmptyState(Icons.Default.ChatBubbleOutline, "Nothing here", when (mode) {
+                            InboxMode.HIDDEN -> "Long-press a chat and pick Hide to move it here."
+                            InboxMode.ARCHIVED -> "Archived chats show up here."
+                            else -> "Tap the pencil to start a conversation."
+                        })
+                    }
+                    items(list, key = { it.key }) { r ->
                         Box(Modifier.animateItem(fadeInSpec = Motion.spec(), fadeOutSpec = Motion.spec(), placementSpec = Motion.spec())) {
                           SwipeRow(r, settings.swipeLeft, settings.swipeRight) {
                             ConvItem(r, onClick = { Nav.go(Screen.Chat(r.key)) }, onLong = { Haptics.long(view); actionsFor = r })
                         } }
                     }
+                    item { Spacer(Modifier.height(24.dp)) }
                 }
             }
         }
@@ -366,36 +390,85 @@ private fun SwipeRow(r: ConvRow, left: String, right: String, content: @Composab
     ) { Box(Modifier.background(MaterialTheme.colorScheme.background)) { content() } }
 }
 
+/** Search field that opens full search (sits under the big title, like a phone's own apps). */
+@Composable
+fun SearchPill(onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.Search, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(8.dp))
+        Text("Search", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+fun Pill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg by androidx.compose.animation.animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh, Motion.spec(), label = "pill")
+    Text(label, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp))
+}
+
+/** Pinned chats as big circles at the top. */
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PinnedGrid(rows: List<ConvRow>, onOpen: (ConvRow) -> Unit, onLong: (ConvRow) -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly, maxItemsInEachRow = 3,
+    ) {
+        rows.take(9).forEach { r ->
+            Column(Modifier.width(110.dp).padding(vertical = 8.dp).clip(RoundedCornerShape(16.dp))
+                .combinedClickable(onClick = { onOpen(r) }, onLongClick = { onLong(r) }).padding(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Box {
+                    Avatar(r.name, r.photo, 76.dp, group = r.isGroup && r.photo == null)
+                    if (r.unread) Box(Modifier.align(Alignment.TopStart).size(16.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.background).padding(3.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                }
+                Text(r.name.substringBefore(' '), Modifier.padding(top = 6.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium, fontWeight = if (r.unread) FontWeight.SemiBold else FontWeight.Normal)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
     val style = LocalChatStyle.current
-    val vPad = if (style.compact) 6.dp else 12.dp
+    val vPad = if (style.compact) 8.dp else 11.dp
+    val avatar = if (style.compact) 42.dp else 52.dp
     Row(
-        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLong).padding(horizontal = 16.dp, vertical = vPad),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLong).padding(start = 6.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Unread dot lives in the left margin, so names stay aligned
+        Box(Modifier.width(16.dp), contentAlignment = Alignment.Center) {
+            androidx.compose.animation.AnimatedVisibility(r.unread, enter = androidx.compose.animation.scaleIn(Motion.popSpec()), exit = androidx.compose.animation.scaleOut()) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+            }
+        }
         if (style.showAvatars) {
-            Avatar(r.name, r.photo, if (style.compact) 40.dp else 52.dp, group = r.isGroup && r.photo == null)
-            Spacer(Modifier.width(14.dp))
+            Avatar(r.name, r.photo, avatar, group = r.isGroup && r.photo == null)
+            Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(r.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    fontWeight = if (r.unread) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.titleMedium)
-                if (r.meta.pinned) Icon(Icons.Default.PushPin, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (r.meta.muted) Icon(Icons.Default.NotificationsOff, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(6.dp))
-                Text(shortTime(r.date), style = MaterialTheme.typography.labelSmall,
-                    color = if (r.unread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.padding(vertical = vPad)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(r.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    if (r.meta.muted) Icon(Icons.Default.NotificationsOff, "Muted", Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(6.dp))
+                    Text(shortTime(r.date), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.outline)
+                }
+                Text(r.snippet, maxLines = if (style.compact) 1 else 2, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp))
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(r.snippet, Modifier.weight(1f), maxLines = if (style.compact) 1 else 2, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (r.unread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = if (r.unread) FontWeight.Medium else FontWeight.Normal)
-                if (r.unread) Box(Modifier.padding(start = 8.dp).size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-            }
+            androidx.compose.material3.HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }

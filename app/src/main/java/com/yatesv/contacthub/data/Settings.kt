@@ -8,7 +8,7 @@ import org.json.JSONObject
 /** Every customizable option. Saved as JSON in SharedPreferences. */
 data class Settings(
     // Look
-    val preset: String = "google",          // google, samsung, imessage, custom
+    val preset: String = "hub",             // hub (default), google, samsung, imessage, custom
     val darkMode: String = "system",        // system, light, dark, amoled
     val dynamicColor: Boolean = true,
     val accent: Int = 0xFF3D7BFF.toInt(),
@@ -78,6 +78,7 @@ data class Settings(
     // Setup
     val onboarded: Boolean = false,
     val setupVersion: Int = 0,
+    val designVersion: Int = 0,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("preset", preset); put("darkMode", darkMode); put("dynamicColor", dynamicColor); put("accent", accent)
@@ -95,7 +96,7 @@ data class Settings(
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
         put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
-        put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion)
+        put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion); put("designVersion", designVersion)
     }
 
     companion object {
@@ -130,7 +131,7 @@ data class Settings(
                 screenEffects = j.optBoolean("screenEffects", false), sendSound = j.optBoolean("sendSound", false),
                 animatedReactions = j.optBoolean("animatedReactions", false), driveUri = j.optString("driveUri", ""),
                 autoUpdate = j.optBoolean("autoUpdate", true), lastUpdateCheck = j.optLong("lastUpdateCheck", 0),
-                setupVersion = j.optInt("setupVersion", 0),
+                setupVersion = j.optInt("setupVersion", 0), designVersion = j.optInt("designVersion", 0),
             )
         }
     }
@@ -138,7 +139,10 @@ data class Settings(
 
 class SettingsStore(ctx: Context) {
     private val prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    private val _flow = MutableStateFlow(load())
+    private val _flow = MutableStateFlow(load().let { s ->
+        // One-time move to the new default look for people who never picked a style
+        if (s.designVersion < 1) s.copy(designVersion = 1, preset = if (s.preset == "google" && s.sentColor == 0 && s.recvColor == 0) "hub" else s.preset) else s
+    })
     val flow: StateFlow<Settings> = _flow
     val value: Settings get() = _flow.value
 

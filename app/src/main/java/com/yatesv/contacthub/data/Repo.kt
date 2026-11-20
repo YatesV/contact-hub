@@ -153,10 +153,14 @@ class SmsRepo(private val ctx: Context) {
     fun threadFor(addresses: List<String>): Long =
         runCatching { Telephony.Threads.getOrCreateThreadId(ctx, addresses.toSet()) }.getOrDefault(0L)
 
-    suspend fun messages(threadId: Long, limit: Int = 600): List<Msg> = withContext(Dispatchers.IO) {
+    /**
+     * Newest [limit] messages of a thread. Fast path: one query for SMS, one for MMS, ONE query for
+     * all MMS parts together, and sender lookups only for group picture messages.
+     */
+    suspend fun messages(threadId: Long, limit: Int = 80, group: Boolean = false): List<Msg> = withContext(Dispatchers.IO) {
         if (threadId <= 0) return@withContext emptyList()
         val sms = runCatching { cr.query(
-            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type", "status"),
+            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type"),
             "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
         ).rows(limit) { c ->
             val type = c.int("type")
@@ -169,32 +173,39 @@ class SmsRepo(private val ctx: Context) {
                     else -> 0
                 },
             )
-        } }.onFailure { android.util.Log.w("ContactHub", "SMS read failed", it) }.getOrDefault(emptyList())
-        val mms = runCatching { cr.query(
+        } }.onFailure { HubLog.w("Repo", "SMS read failed", it) }.getOrDefault(emptyList())
+
+        val heads = runCatching { cr.query(
             Telephony.Mms.CONTENT_URI, arrayOf("_id", "date", "msg_box"),
             "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
-        ).rows(limit) { c -> Triple(c.long("_id"), c.long("date") * 1000, c.int("msg_box")) }
-            .map { (id, date, box) -> runCatching { mmsMessage(id, date, box) }.getOrElse { Msg("m:$id", "", date, box != 1) } }
-        }.onFailure { android.util.Log.w("ContactHub", "MMS read failed", it) }.getOrDefault(emptyList())
-        (sms + mms).sortedBy { it.date }
-    }
+        ).rows(limit) { c -> Triple(c.long("_id"), c.long("date") * 1000, c.int("msg_box")) } }
+            .onFailure { HubLog.w("Repo", "MMS read failed", it) }.getOrDefault(emptyList())
 
-    private fun mmsMessage(id: Long, date: Long, box: Int): Msg {
-        val texts = ArrayList<String>()
-        val files = ArrayList<Attachment>()
-        cr.query(Uri.parse("content://mms/part"), arrayOf("_id", "ct", "text"), "mid = ?", arrayOf(id.toString()), null)
-            .rows { c ->
-                val ct = c.str("ct")
-                when {
-                    ct == "text/plain" -> texts += c.str("text")
-                    ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") ->
-                        files += Attachment(Uri.parse("content://mms/part/${c.long("_id")}"), ct)
+        val texts = HashMap<Long, MutableList<String>>()
+        val files = HashMap<Long, MutableList<Attachment>>()
+        heads.map { it.first }.chunked(400).forEach { ids ->
+            runCatching {
+                cr.query(Uri.parse("content://mms/part"), arrayOf("_id", "mid", "ct", "text"),
+                    "mid IN (${ids.joinToString(",")})", null, null).rows { c ->
+                    val mid = c.long("mid"); val ct = c.str("ct")
+                    when {
+                        ct == "text/plain" -> texts.getOrPut(mid) { mutableListOf() } += c.str("text")
+                        ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") ->
+                            files.getOrPut(mid) { mutableListOf() } += Attachment(Uri.parse("content://mms/part/${c.long("_id")}"), ct)
+                    }
                 }
-            }
-        val from = if (box == 1) cr.query(
-            Uri.parse("content://mms/$id/addr"), arrayOf("address", "type"), "type = 137", null, null,
-        ).rows { it.str("address") }.firstOrNull().orEmpty() else ""
-        return Msg("m:$id", texts.joinToString("\n").trim(), date, box != 1, from, files)
+            }.onFailure { HubLog.w("Repo", "MMS parts read failed", it) }
+        }
+        val mms = heads.map { (id, date, box) ->
+            // Who sent it only matters in groups (in a 1-on-1 chat it's the other person)
+            val from = if (box == 1 && group) runCatching {
+                cr.query(Uri.parse("content://mms/$id/addr"), arrayOf("address"), "type = 137", null, null).rows { it.str("address") }.firstOrNull()
+            }.getOrNull().orEmpty() else ""
+            Msg("m:$id", texts[id].orEmpty().joinToString("\n").trim(), date, box != 1, from, files[id].orEmpty(),
+                status = if (box == 4) 1 else if (box == 5) 2 else 0)
+        }
+        // Keep the newest [limit] overall
+        (sms + mms).sortedByDescending { it.date }.take(limit).sortedBy { it.date }
     }
 
     /** All photos/videos sent back and forth in a thread. */

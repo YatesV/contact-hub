@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,7 +69,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -105,8 +109,12 @@ fun ContactsScreen() {
     val shown = list.orEmpty().filter { q.isBlank() || it.name.contains(q, true) || Phone.norm(it.number).contains(Phone.norm(q).ifEmpty { "~" }) }
     val favorites = shown.filter { it.starred }
 
+    val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Contacts") }) },
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        topBar = { androidx.compose.material3.LargeTopAppBar(title = { Text("Contacts") }, scrollBehavior = scroll,
+            colors = androidx.compose.material3.TopAppBarDefaults.largeTopAppBarColors(containerColor = MaterialTheme.colorScheme.background,
+                scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.96f))) },
         floatingActionButton = {
             FloatingActionButton({
                 ctx.startActivity(Intent(Intent.ACTION_INSERT, ContactsContract.Contacts.CONTENT_URI).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -206,22 +214,28 @@ fun ContactScreen(number: String) {
             })
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState())) {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Avatar(name, contact?.photo, 104.dp)
-                Spacer(Modifier.height(10.dp))
-                Text(name, style = MaterialTheme.typography.headlineSmall)
-                Text(Phone.pretty(number), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (member != null && member.place.isNotBlank()) Text("📍 ${member.place}", color = MaterialTheme.colorScheme.primary)
-            }
-            Spacer(Modifier.height(14.dp))
-
-            // Quick actions
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                QuickAction(Icons.AutoMirrored.Filled.Chat, "Text") { Nav.go(Screen.Chat(Phone.convKey(listOf(number)))) }
-                QuickAction(Icons.Default.Call, "Call") { CallManager.place(ctx, number) }
-                QuickAction(Icons.Default.Videocam, "Video") { CallManager.place(ctx, number, video = true) }
-                if (member?.lat != null) QuickAction(Icons.Default.Directions, "Directions") {
-                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${member.lat},${member.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // Header: soft tinted backdrop from their photo/color, big photo, name, quick actions
+            Box(Modifier.fillMaxWidth()) {
+                Box(Modifier.matchParentSize().background(androidx.compose.ui.graphics.Brush.verticalGradient(
+                    listOf(memberColor(name).copy(alpha = 0.35f), MaterialTheme.colorScheme.background))))
+                if (contact?.photo != null) AsyncImage(contact.photo, null, Modifier.matchParentSize().blur(40.dp).graphicsLayer { alpha = 0.35f },
+                    contentScale = ContentScale.Crop)
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Avatar(name, contact?.photo, 112.dp)
+                    Spacer(Modifier.height(12.dp))
+                    Text(name, style = MaterialTheme.typography.headlineMedium)
+                    Text(Phone.pretty(number), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (member != null && member.place.isNotBlank()) Text("📍 ${member.place}", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        QuickAction(Icons.AutoMirrored.Filled.Chat, "message") { Nav.go(Screen.Chat(Phone.convKey(listOf(number)))) }
+                        QuickAction(Icons.Default.Call, "call") { CallManager.place(ctx, number) }
+                        QuickAction(Icons.Default.Videocam, "video") { CallManager.place(ctx, number, video = true) }
+                        QuickAction(Icons.Default.Directions, "directions", enabled = member?.lat != null) {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${member?.lat},${member?.lng}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                    }
                 }
             }
 
@@ -329,10 +343,16 @@ fun ContactScreen(number: String) {
 }
 
 @Composable
-private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FilledTonalButton(onClick, Modifier.size(58.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Icon(icon, label) }
-        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp))
+private fun RowScope.QuickAction(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Column(
+        Modifier.weight(1f).pressScale(src).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(src, null, enabled = enabled, onClick = onClick).padding(vertical = 10.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
     }
 }
 

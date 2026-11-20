@@ -21,6 +21,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -235,7 +237,9 @@ private fun Tabs() {
     val s by Hub.settings.flow.collectAsState()
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            Column {
+            androidx.compose.material3.HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f), tonalElevation = 0.dp) {
                 listOf(
                     Triple("messages", "Messages", Icons.Default.Chat),
                     Triple("contacts", "Contacts", Icons.Default.Contacts),
@@ -245,9 +249,14 @@ private fun Tabs() {
                     NavigationBarItem(
                         selected = Nav.tab == id, onClick = { Nav.tab = id },
                         icon = { Icon(icon, label) },
-                        label = if (s.navLabels) ({ Text(label) }) else null,
+                        label = if (s.navLabels) ({ Text(label, style = MaterialTheme.typography.labelSmall) }) else null,
+                        colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                            indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant),
                     )
                 }
+            }
             }
         },
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),

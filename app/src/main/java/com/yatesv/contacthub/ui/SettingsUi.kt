@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -80,7 +81,13 @@ private fun set(block: (Settings) -> Settings) = Hub.settings.update(block)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsHome() {
-    Scaffold(topBar = { TopAppBar(title = { Text("Settings") }) }) { pad ->
+    val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        topBar = { androidx.compose.material3.LargeTopAppBar(title = { Text("Settings") }, scrollBehavior = scroll,
+            colors = androidx.compose.material3.TopAppBarDefaults.largeTopAppBarColors(containerColor = MaterialTheme.colorScheme.background,
+                scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.96f))) },
+    ) { pad ->
         Column(Modifier.padding(pad).verticalScroll(rememberScrollState())) {
             UpdateBanner()
             SettingsGroup {
@@ -192,7 +199,7 @@ private fun LookPage() {
         }
     }
     SectionTitle("Theme")
-    ChoiceRow("Style preset", listOf("google" to "Google Messages", "samsung" to "Samsung", "imessage" to "iMessage", "custom" to "Custom"), s.preset) { v ->
+    ChoiceRow("Style preset", listOf("hub" to "Contact Hub", "google" to "Google Messages", "samsung" to "Samsung", "imessage" to "iMessage", "custom" to "Custom"), s.preset) { v ->
         set { it.copy(preset = v, bubbleShape = "", sentColor = 0, recvColor = 0, sentText = 0, recvText = 0) }
     }
     ChoiceRow("Dark mode", listOf("system" to "System", "light" to "Light", "dark" to "Dark", "amoled" to "Pure black"), s.darkMode) { v -> set { it.copy(darkMode = v) } }

@@ -29,6 +29,17 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -90,6 +101,7 @@ import com.yatesv.contacthub.Hub
 import com.yatesv.contacthub.data.ContactExtra
 import com.yatesv.contacthub.data.ConvMeta
 import com.yatesv.contacthub.data.GroupInfo
+import com.yatesv.contacthub.data.HubLog
 import com.yatesv.contacthub.data.Msg
 import com.yatesv.contacthub.data.Otp
 import com.yatesv.contacthub.data.Phone
@@ -106,14 +118,17 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 
 data class ShownReaction(val emoji: String, val fromMe: Boolean, val pending: Boolean, val id: Long)
-data class ChatData(val msgs: List<Msg>, val reactions: Map<String, List<ShownReaction>>, val threadId: Long)
+data class ChatData(val msgs: List<Msg>, val reactions: Map<String, List<ShownReaction>>, val threadId: Long, val hasMore: Boolean = false)
+
+/** Last loaded copy of each chat, so reopening a chat shows instantly while it refreshes. */
+object ChatCache { val map = java.util.concurrent.ConcurrentHashMap<String, ChatData>() }
 
 object ChatData0 {
     /** Puts together texts from the phone's database and RCS messages, and turns "Liked …" texts into reactions. */
-    suspend fun load(key: String): ChatData {
+    suspend fun load(key: String, limit: Int = 80): ChatData {
         val dao = Hub.db.dao()
         val thread = Hub.sms.threadIdFor(key)
-        val provider = Hub.sms.messages(thread)
+        val provider = Hub.sms.messages(thread, limit, group = Phone.isGroupKey(key))
         val locals = dao.local(key)
         val merged = ArrayList(provider)
         for (l in locals) {
@@ -143,7 +158,7 @@ object ChatData0 {
                 if (list.none { it.emoji == sr.emoji && it.fromMe == sr.fromMe }) list += sr
             }
         }
-        return ChatData(shown, reactions, thread)
+        return ChatData(shown, reactions, thread, hasMore = provider.size >= limit)
     }
 }
 
@@ -160,7 +175,9 @@ fun ChatScreen(key: String) {
     val settings by Hub.settings.flow.collectAsState()
     val style = LocalChatStyle.current
     val snack = remember { SnackbarHostState() }
-    var data by remember { mutableStateOf<ChatData?>(null) }
+    var data by remember { mutableStateOf(ChatCache.map[key]) }
+    var limit by remember(key) { androidx.compose.runtime.mutableIntStateOf(80) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     var meta by remember { mutableStateOf(ConvMeta(key)) }
     var group by remember { mutableStateOf<GroupInfo?>(null) }
     var extras by remember { mutableStateOf(emptyMap<String, ContactExtra>()) }
@@ -189,11 +206,19 @@ fun ChatScreen(key: String) {
         Hub.openConv = key
         onDispose { if (Hub.openConv == key) Hub.openConv = "" }
     }
-    LaunchedEffect(key, version) {
+    LaunchedEffect(key, version, limit) {
         meta = dao.meta(key) ?: ConvMeta(key)
         group = dao.allGroups().firstOrNull { it.convKey == key }
         extras = dao.allExtras().associateBy { it.phoneKey }
-        data = runCatching { ChatData0.load(key) }.getOrDefault(ChatData(emptyList(), emptyMap(), 0))
+        if (data != null) kotlinx.coroutines.delay(150)   // coalesce bursts of updates
+        val fresh = runCatching { ChatData0.load(key, limit) }.getOrElse { HubLog.w("Chat", "load failed", it); null }
+        if (fresh != null) { data = fresh; ChatCache.map[key] = fresh }
+        else if (data == null) data = ChatData(emptyList(), emptyMap(), 0)
+    }
+    // Scrolled up to the oldest loaded message: load 200 more
+    LaunchedEffect(listState, data?.hasMore) {
+        androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index to listState.layoutInfo.totalItemsCount }
+            .collect { (last, total) -> if (data?.hasMore == true && last != null && total > 0 && last >= total - 5) limit += 200 }
     }
     LaunchedEffect(key) {
         ActionReceiver.markRead(key); Notifier.cancel(ctx, key)
@@ -245,28 +270,28 @@ fun ChatScreen(key: String) {
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
         topBar = {
-            TopAppBar(
-                navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            CenterAlignedTopAppBar(
+                expandedHeight = 76.dp,
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f)),
+                navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "Back", tint = MaterialTheme.colorScheme.primary) } },
                 title = {
-                    Row(Modifier.clickable {
+                    // Photo on top, name underneath: tap for their contact card
+                    Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable {
                         if (isGroup) groupDialog = true else addresses.firstOrNull()?.let { Nav.go(Screen.Contact(it)) }
-                    }, verticalAlignment = Alignment.CenterVertically) {
+                    }.padding(horizontal = 10.dp, vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Avatar(name, group?.photoUri?.ifBlank { null } ?: if (!isGroup) Hub.contacts.cached(addresses.firstOrNull().orEmpty())?.photo else null,
-                            38.dp, group = isGroup && group?.photoUri.isNullOrBlank())
-                        Column(Modifier.padding(start = 10.dp)) {
-                            Text(name, maxLines = 1, style = MaterialTheme.typography.titleMedium)
-                            val sub = listOfNotNull(
-                                when (chatType) { "rcs" -> "RCS chat"; "sms" -> "SMS/MMS"; else -> null },
-                                if (isGroup) "${addresses.size.takeIf { it > 0 } ?: ""} people".trim() else null,
-                            ).joinToString(" · ")
-                            if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            40.dp, group = isGroup && group?.photoUri.isNullOrBlank())
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                            Text(name, maxLines = 1, style = MaterialTheme.typography.labelMedium, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 200.dp))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 },
                 actions = {
-                    if (!isGroup && addresses.isNotEmpty()) IconButton({ CallManager.place(ctx, addresses[0]) }) { Icon(Icons.Default.Call, "Call") }
+                    if (!isGroup && addresses.isNotEmpty()) IconButton({ CallManager.place(ctx, addresses[0]) }) { Icon(Icons.Default.Call, "Call", tint = MaterialTheme.colorScheme.primary) }
                     Box {
-                        IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }
+                        IconButton({ menu = true }) { Icon(Icons.Default.MoreHoriz, "More", tint = MaterialTheme.colorScheme.primary) }
                         DropdownMenu(menu, { menu = false }) {
                             if (isGroup) DropdownMenuItem({ Text("Group name, photo & colors") }, { menu = false; groupDialog = true })
                             else DropdownMenuItem({ Text("Contact page") }, { menu = false; addresses.firstOrNull()?.let { Nav.go(Screen.Contact(it)) } })
@@ -308,7 +333,16 @@ fun ChatScreen(key: String) {
                     if (data != null && !initialDone) { seen.addAll(real.map { it.key }); initialDone = true }
                 }
                 val starredKeys = starred.map { it.msgKey }.toSet()
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
+                // Drag left anywhere in the chat to peek at every message's time; it springs back when you let go
+                val reveal = remember { androidx.compose.animation.core.Animatable(0f) }
+                val maxReveal = with(androidx.compose.ui.platform.LocalDensity.current) { 64.dp.toPx() }
+                val lastOutKey = msgs.lastOrNull { it.outgoing }?.key
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = { scope.launch { reveal.animateTo(0f, Motion.spec()) } },
+                        onDragCancel = { scope.launch { reveal.animateTo(0f, Motion.spec()) } },
+                    ) { change, dx -> change.consume(); scope.launch { reveal.snapTo((reveal.value - dx * 0.6f).coerceIn(0f, maxReveal)) } }
+                }, state = listState, reverseLayout = true, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
                     items(reversed.size, key = { reversed[it].key }) { i ->
                         val m = reversed[i]
@@ -319,6 +353,11 @@ fun ChatScreen(key: String) {
                         val last = newer == null || newer.outgoing != m.outgoing || newer.sender != m.sender || newer.date - m.date > 300_000
                         Column(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null, placementSpec = Motion.spec())) {
                             if (older == null || !sameDay(older.date, m.date)) DateChip(m.date)
+                            Box(Modifier.fillMaxWidth()) {
+                            if (reveal.value > 1f) Text(java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(m.date)),
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp).graphicsLayer { alpha = reveal.value / maxReveal })
+                            Box(Modifier.graphicsLayer { translationX = -reveal.value }) {
                             EnterAnim(isNew, m.outgoing, onShown = {
                                 seen.add(m.key)
                                 if (!m.outgoing) Effects.trigger(m.body)
@@ -333,6 +372,20 @@ fun ChatScreen(key: String) {
                                 onLong = { Haptics.long(view); selected = m },
                                 onBounds = { bounds[m.key] = it },
                             ) }
+                            }
+                            }
+                            // Status under your last message
+                            if (m.key == lastOutKey) Text(
+                                when {
+                                    m.status == 1 -> "Sending…"
+                                    m.status == 2 -> "Not delivered"
+                                    chatType == "sms" || (!m.rcs && m.key.startsWith("s:")) -> "Sent as text message"
+                                    else -> "Sent"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (m.status == 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.End).padding(end = 16.dp, top = 2.dp),
+                            )
                         }
                     }
                 }
@@ -347,23 +400,52 @@ fun ChatScreen(key: String) {
                     }
                 }
 
-                Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)) {
-                    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(6.dp), verticalAlignment = Alignment.Bottom) {
-                        IconButton({ pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }) {
-                            Icon(Icons.Default.AddPhotoAlternate, "Photo")
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f)) {
+                    var plus by remember { mutableStateOf(false) }
+                    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
+                        Box {
+                            IconButton({ plus = true }, Modifier.padding(bottom = 2.dp).size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                                Icon(Icons.Default.Add, "Photos and more", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            DropdownMenu(plus, { plus = false }) {
+                                DropdownMenuItem({ Text("Photos") }, { plus = false; pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
+                                    leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, null) })
+                                DropdownMenuItem({ Text("Schedule message") }, { plus = false; if (text.isNotBlank()) scheduling = true else scope.launch { snack.showSnackbar("Type a message first, then schedule it") } },
+                                    leadingIcon = { Icon(Icons.Default.Schedule, null) })
+                            }
                         }
-                        TextField(
-                            text, { text = it }, Modifier.weight(1f).heightIn(max = 160.dp),
-                            placeholder = { Text(if (chatType == "rcs") "RCS message" else "Text message") },
-                            shape = RoundedCornerShape(24.dp),
-                            colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                imeAction = if (settings.sendOnEnter) androidx.compose.ui.text.input.ImeAction.Send else androidx.compose.ui.text.input.ImeAction.Default,
-                                capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
-                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { send() }),
-                        )
-                        IconButton({ if (text.isNotBlank()) scheduling = true }) { Icon(Icons.Default.Schedule, "Schedule") }
-                        FilledIconButton(::send, enabled = text.isNotBlank()) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
+                        Spacer(Modifier.width(8.dp))
+                        // Pill-shaped text box with the send arrow inside it
+                        Row(Modifier.weight(1f).clip(RoundedCornerShape(20.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.background).heightIn(min = 40.dp, max = 160.dp),
+                            verticalAlignment = Alignment.Bottom) {
+                            androidx.compose.foundation.text.BasicTextField(
+                                text, { text = it },
+                                Modifier.weight(1f).padding(start = 14.dp, end = 6.dp, top = 9.dp, bottom = 9.dp),
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                    imeAction = if (settings.sendOnEnter) androidx.compose.ui.text.input.ImeAction.Send else androidx.compose.ui.text.input.ImeAction.Default,
+                                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
+                                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { send() }),
+                                decorationBox = { inner ->
+                                    Box {
+                                        if (text.isEmpty()) Text(if (chatType == "rcs") "RCS message" else "Text message",
+                                            style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        inner()
+                                    }
+                                },
+                            )
+                            androidx.compose.animation.AnimatedVisibility(text.isNotBlank(),
+                                enter = androidx.compose.animation.scaleIn(Motion.popSpec()) + androidx.compose.animation.fadeIn(),
+                                exit = androidx.compose.animation.scaleOut(Motion.spec()) + androidx.compose.animation.fadeOut()) {
+                                Box(Modifier.padding(4.dp).size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                                    .clickable(onClickLabel = "Send") { send() }, contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.ArrowUpward, "Send", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }

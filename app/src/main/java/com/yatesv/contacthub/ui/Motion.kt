@@ -54,7 +54,12 @@ object Motion {
     )
     val labels = mapOf("ios" to "iOS", "bouncy" to "Bouncy", "smooth" to "Smooth", "snappy" to "Snappy", "custom" to "Custom", "off" to "Off")
 
-    fun params(s: Settings = Hub.settings.value): SpringParams? = when (s.motion) {
+    /** Android's "Remove animations" accessibility setting turns motion off everywhere. */
+    private fun systemMotionOff() = runCatching {
+        android.provider.Settings.Global.getFloat(Hub.app.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }.getOrDefault(false)
+
+    fun params(s: Settings = Hub.settings.value): SpringParams? = if (systemMotionOff()) null else when (s.motion) {
         "off" -> null
         "custom" -> SpringParams(s.springDamping, s.springStiffness)
         else -> presets[s.motion] ?: presets.getValue("ios")
@@ -125,6 +130,8 @@ object SendSound {
         }
     }
 }
+
+fun pressScaleModifier(source: MutableInteractionSource): Modifier = Modifier.pressScale(source, 0.92f)
 
 /** Press-to-shrink feel for tappable things. */
 fun Modifier.pressScale(source: MutableInteractionSource, scale: Float = 0.95f): Modifier = composed {

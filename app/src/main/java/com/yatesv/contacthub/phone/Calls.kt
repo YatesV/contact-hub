@@ -70,13 +70,13 @@ object CallManager {
         override fun onDetailsChanged(c: Call, details: Call.Details) { call?.let { publish(it) } }
     }
 
-    fun added(c: Call) {
+    fun added(c: Call) = com.yatesv.contacthub.data.safely("Calls") {
         calls += c
         c.registerCallback(callback)
         call?.let { publish(it) }
     }
 
-    fun removed(c: Call) {
+    fun removed(c: Call) = com.yatesv.contacthub.data.safely("Calls") {
         // Offer a call note for calls that connected
         lastConnected?.let { (num, at) ->
             lastConnected = null
@@ -96,7 +96,9 @@ object CallManager {
 
     private fun numberOf(c: Call) = c.details.handle?.schemeSpecificPart.orEmpty()
 
-    private fun publish(c: Call) {
+    private fun publish(c: Call) = com.yatesv.contacthub.data.safely("Calls") { publishNow(c) }
+
+    private fun publishNow(c: Call) {
         val d = c.details
         val kids = c.children.filter { it.state != Call.STATE_DISCONNECTED }.map { numberOf(it) }.filter { it.isNotBlank() }
         val number = numberOf(c).ifBlank { kids.firstOrNull().orEmpty() }

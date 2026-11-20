@@ -206,8 +206,8 @@ fun ChatScreen(key: String) {
     var forwardThese by remember { mutableStateOf<List<Msg>?>(null) }
     var deleteThese by remember { mutableStateOf<List<Msg>?>(null) }
     var showGifs by remember { mutableStateOf(false) }
-    var editPhoto by remember { mutableStateOf<Uri?>(null) }
-    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    var editPhoto by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Uri?>(null) }
+    var cameraUri by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Uri?>(null) }
     /** A new message came in while you were scrolled up */
     var newBelow by remember(key) { mutableStateOf(false) }
     var showTimes by remember { mutableStateOf(setOf<String>()) }
@@ -582,10 +582,10 @@ fun ChatScreen(key: String) {
                                 DropdownMenuItem({ Text("Photos") }, { plus = false; pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                                     leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, null) })
                                 DropdownMenuItem({ Text("Camera") }, { plus = false
-                                    cameraUri = OutFiles.uri(ctx, OutFiles.new(ctx, "cam", "jpg")); runCatching { takePhoto.launch(cameraUri!!) } },
+                                    runCatching { val u = OutFiles.uri(ctx, OutFiles.new(ctx, "cam", "jpg")); cameraUri = u; takePhoto.launch(u) }.onFailure { scope.launch { snack.showSnackbar("Couldn't open the camera") } } },
                                     leadingIcon = { Icon(Icons.Default.PhotoCamera, null) })
                                 DropdownMenuItem({ Text("Record video") }, { plus = false
-                                    cameraUri = OutFiles.uri(ctx, OutFiles.new(ctx, "vid", "mp4")); runCatching { takeVideo.launch(cameraUri!!) } },
+                                    runCatching { val u = OutFiles.uri(ctx, OutFiles.new(ctx, "vid", "mp4")); cameraUri = u; takeVideo.launch(u) }.onFailure { scope.launch { snack.showSnackbar("Couldn't open the camera") } } },
                                     leadingIcon = { Icon(Icons.Default.Videocam, null) })
                                 DropdownMenuItem({ Text("GIF") }, { plus = false; showGifs = true }, leadingIcon = { Icon(Icons.Default.Gif, null) })
                                 DropdownMenuItem({ Text("My location") }, { plus = false

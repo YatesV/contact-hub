@@ -60,3 +60,12 @@ object HubLog {
         runCatching { file?.writeText("") }
     }
 }
+
+/** Runs code Android calls in the background; a bug gets logged instead of closing the whole app. */
+inline fun safely(tag: String, block: () -> Unit) {
+    try { block() } catch (e: Throwable) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        HubLog.w(tag, "caught crash", e)
+        com.yatesv.contacthub.engine.CrashLog.caught(tag, e)
+    }
+}

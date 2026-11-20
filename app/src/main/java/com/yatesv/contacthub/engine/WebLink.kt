@@ -66,7 +66,7 @@ object WebLink {
 }
 
 class WebLinkService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> HubLog.w("WebLink", "job failed", e) })
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> HubLog.w("WebLink", "job failed", e); CrashLog.caught("Laptop link", e) })
     private var server: ServerSocket? = null
     private var idle: kotlinx.coroutines.Job? = null
 

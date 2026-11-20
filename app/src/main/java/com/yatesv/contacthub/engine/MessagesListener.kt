@@ -31,7 +31,7 @@ class MessagesListener : NotificationListenerService() {
     override fun onListenerConnected() { connected = true }
     override fun onListenerDisconnected() { connected = false }
 
-    override fun onNotificationPosted(sbn: StatusBarNotification) {
+    override fun onNotificationPosted(sbn: StatusBarNotification) { com.yatesv.contacthub.data.safely("MessagesListener") {
         val pkg = sbn.packageName
         if (pkg != GOOGLE_MESSAGES && pkg != SAMSUNG_MESSAGES) return
         val n = sbn.notification
@@ -94,6 +94,7 @@ class MessagesListener : NotificationListenerService() {
                     mention = isGroup && s.myName.isNotBlank() && incoming.any { it.text?.toString()?.contains(s.myName, ignoreCase = true) == true })
             }
         }
+    }
     }
 
     /** A group whose full member list we don't know (only who talked recently). */

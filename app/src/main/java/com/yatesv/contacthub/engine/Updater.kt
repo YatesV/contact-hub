@@ -155,7 +155,7 @@ object Updater {
 }
 
 class InstallReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("Updater") {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 @Suppress("DEPRECATION")
@@ -174,5 +174,6 @@ class InstallReceiver : BroadcastReceiver() {
                 Updater.state.value = Updater.state.value.copy(progress = -1f, error = "Install didn't finish: $msg")
             }
         }
+    }
     }
 }

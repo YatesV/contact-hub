@@ -113,6 +113,7 @@ fun SettingsHome() {
             }
             SettingsGroup {
                 SettingRow("Privacy & data", "What's stored, what leaves your phone, delete everything", Icons.Default.Shield, onClick = { Nav.go(Screen.SettingsPage("privacydata")) })
+                SettingRow("Crash & bug reports", "Why Orbit crashed or hit a bug, with full reports to share", Icons.Default.BugReport, onClick = { Nav.go(Screen.SettingsPage("reports")) })
                 SettingRow("Developer", "Mock location, full self-test, activity log (.txt)", Icons.Default.BugReport, onClick = { Nav.go(Screen.SettingsPage("developer")) })
                 SettingRow("About & updates", "Build ${BuildConfig.VERSION_CODE}", Icons.Default.Info, onClick = { Nav.go(Screen.SettingsPage("about")) })
                 SettingRow("Open-source licenses", null, Icons.Default.Description, onClick = { Nav.go(Screen.SettingsPage("licenses")) })
@@ -127,7 +128,7 @@ fun SettingsHome() {
 fun SettingsPage(page: String) {
     val title = mapOf("setup" to "Permissions checklist", "look" to "Look & feel", "messaging" to "Messaging", "notifications" to "Notifications",
         "privacy" to "Privacy & security", "life360" to "Life360", "backup" to "Backup", "about" to "About & updates", "motion" to "Motion & feel",
-        "developer" to "Developer", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
+        "developer" to "Developer", "reports" to "Crash & bug reports", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
         "ai" to "AI & smart replies", "arrivals" to "Arrival texts", "laptop" to "Text from your laptop")[page] ?: "Settings"
     Scaffold(topBar = {
         TopAppBar(title = { Text(title) }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
@@ -143,6 +144,7 @@ fun SettingsPage(page: String) {
                 "backup" -> BackupPage()
                 "motion" -> MotionPage()
                 "developer" -> DeveloperPage()
+                "reports" -> ReportsPage()
                 "privacydata" -> PrivacyDataPage()
                 "licenses" -> LicensesPage()
                 "ai" -> AiPage()

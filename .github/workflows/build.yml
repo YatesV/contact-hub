@@ -60,8 +60,19 @@ jobs:
           if gh release view latest >/dev/null 2>&1; then
             # Replace the files in place (never delete the release, so update checks keep working mid-publish).
             # APKs first, version.json last, so phones only see the new build once its APK is there.
-            gh release upload latest Orbit.apk ContactHub.apk --clobber
-            gh release upload latest version.json --clobber
+            # Upload under a temporary name, then swap, so the download link is never missing during the upload.
+            swap() {
+              cp "$1" "next-$1"
+              gh release upload latest "next-$1" --clobber
+              RID=$(gh api repos/${{ github.repository }}/releases/tags/latest --jq .id)
+              OLD=$(gh api repos/${{ github.repository }}/releases/$RID/assets --jq ".[] | select(.name==\"$1\") | .id")
+              NEW=$(gh api repos/${{ github.repository }}/releases/$RID/assets --jq ".[] | select(.name==\"next-$1\") | .id")
+              if [ -n "$OLD" ]; then gh api -X DELETE repos/${{ github.repository }}/releases/assets/$OLD; fi
+              gh api -X PATCH repos/${{ github.repository }}/releases/assets/$NEW -f name="$1" >/dev/null
+            }
+            swap Orbit.apk
+            swap ContactHub.apk
+            swap version.json
             gh release edit latest --title "$TITLE" --notes "$NOTES" --latest
             git tag -f latest "${{ github.sha }}"
             git push -f origin refs/tags/latest || true

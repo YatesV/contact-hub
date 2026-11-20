@@ -16,11 +16,12 @@ import kotlinx.coroutines.launch
 
 /** Home screen widget: up to 4 favorite contacts + the auto-reply switch. */
 class HubWidget : AppWidgetProvider() {
-    override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
+    override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) { com.yatesv.contacthub.data.safely("HubWidget") {
         val pending = goAsync()
         Hub.scope.launch {
             try { draw(ctx, mgr, ids) } finally { pending.finish() }
         }
+    }
     }
 
     companion object {

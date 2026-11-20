@@ -21,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,6 +69,7 @@ sealed class Screen {
     data object Life360SignIn : Screen()
     data class FriendSync(val social: Social) : Screen()
     data object Setup : Screen()
+    data object MockLocation : Screen()
 }
 
 /** Simple back stack. */
@@ -138,6 +140,12 @@ class MainActivity : FragmentActivity() {
 
     private fun handle(intent: Intent?) {
         intent ?: return
+        if (intent.getStringExtra("open") == "mock") {
+            intent.removeExtra("open")
+            Nav.stack.retainAll { it == Screen.Tabs }
+            Nav.go(Screen.MockLocation)
+            return
+        }
         intent.getStringExtra("conv")?.let { key ->
             // Hidden chats still need your fingerprint/PIN, even when opened from a notification or another app
             Hub.scope.launch {
@@ -221,6 +229,7 @@ fun AppRoot() {
             Screen.Life360SignIn -> Life360SignInScreen()
             is Screen.FriendSync -> FriendSyncScreen(top.social)
             Screen.Setup -> SetupWizard(first = false)
+            Screen.MockLocation -> MockScreen()
         }
         }
         }
@@ -265,7 +274,10 @@ private fun Tabs() {
                 ).forEach { (id, label, icon) ->
                     NavigationBarItem(
                         selected = Nav.tab == id, onClick = { if (Nav.tab != id) Haptics.tap(view); Nav.tab = id },
-                        icon = { Icon(icon, label) },
+                        icon = {
+                            if (id == "settings") Box { Icon(icon, label); MockIndicatorDot(Modifier.align(androidx.compose.ui.Alignment.TopEnd).offset(x = 6.dp, y = (-4).dp)) }
+                            else Icon(icon, label)
+                        },
                         label = if (s.navLabels) ({ Text(label, style = MaterialTheme.typography.labelSmall) }) else null,
                         colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
                             indicatorColor = androidx.compose.ui.graphics.Color.Transparent,

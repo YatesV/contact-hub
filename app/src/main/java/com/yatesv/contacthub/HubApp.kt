@@ -77,6 +77,7 @@ class HubApp : Application() {
         Hub.l360 = Life360(this)
         Configuration.getInstance().userAgentValue = packageName
         Notifier.createChannels(this)
+        com.yatesv.contacthub.engine.MockService.createChannel(this)
         runCatching { scheduleWork(this) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
         Hub.scope.launch { runCatching { Hub.contacts.all() } }
     }

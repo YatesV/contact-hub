@@ -36,6 +36,7 @@ Keep **Google Messages as the default texting app**. Contact Hub sends through i
 - **Look**: Google / Samsung / iMessage / custom presets, colors, fonts, text size, bubble shape, density, avatars, swipe actions, wallpaper
 - **Privacy**: fingerprint/PIN lock, hidden chats, hidden notification previews
 - **Extras**: auto-reply (Quick Settings tile + widget), home screen widget, daily backup + export/restore
+- **Mock location** (Settings → Developer): fake GPS for single points or routes that follow real roads (slows for turns, speed presets + slider in mph, stay / stop / loop / back and forth at the end), favorites, recent, scheduled starts, pause/stop from the notification, Quick Settings tile, resumes after a restart. Needs Developer options → Select mock location app → Contact Hub (the app walks you through it). Maps are Mapbox with a free token, or OpenStreetMap without one. Details: `docs/mock-location.md`
 
 ## Known limits
 - No public RCS API exists. The RCS sender depends on how Google/Samsung Messages' screens are built, so their updates can break it. SMS fallback keeps 1-on-1 texting working.

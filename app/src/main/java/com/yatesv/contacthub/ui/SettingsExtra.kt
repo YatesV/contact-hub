@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -456,6 +457,11 @@ fun DeveloperPage() {
         if (uri != null) runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(report.toByteArray()) } }
     }
     fun rebuild() { report = Diagnostics.report(checks, extra) }
+
+    val mock by com.yatesv.contacthub.engine.MockStore.state.collectAsState()
+    SectionTitle("Location")
+    SettingRow("Mock location", if (mock.active) "On: ${mock.item?.name.orEmpty()}" else "Fake GPS: single points, routes on real roads, favorites, schedules",
+        androidx.compose.material.icons.Icons.Default.LocationOn, onClick = { Nav.go(Screen.MockLocation) })
 
     SectionTitle("Self-test")
     Text("Checks every feature it safely can. Nothing is sent to anyone. The report never includes what your messages say.",

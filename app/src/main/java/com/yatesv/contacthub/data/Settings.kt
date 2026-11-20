@@ -59,6 +59,10 @@ data class Settings(
     val l360RefreshMin: Int = 0,            // 0 = only when you open a contact
     val l360Enabled: Boolean = true,
 
+    // Mock location
+    val mapboxToken: String = "",           // free public token (pk.…); empty = OpenStreetMap
+    val mockMapStyle: String = "streets",   // streets, satellite
+
     // Backup
     val backupDaily: Boolean = true,
     val lastBackup: Long = 0,
@@ -105,7 +109,7 @@ data class Settings(
         put("olderThan6Months", olderThan6Months); put("autoReplyOn", autoReplyOn); put("autoReplyText", autoReplyText); put("myName", myName)
         put("appLock", appLock); put("useBiometric", useBiometric); put("pinHash", pinHash); put("lockAfterSec", lockAfterSec)
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
-        put("l360Enabled", l360Enabled); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
+        put("l360Enabled", l360Enabled); put("mapboxToken", mapboxToken); put("mockMapStyle", mockMapStyle); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
         put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
@@ -139,6 +143,7 @@ data class Settings(
                 pinHash = j.optString("pinHash", ""), lockAfterSec = j.optInt("lockAfterSec", 30),
                 hidePreviews = j.optBoolean("hidePreviews", false), l360Token = j.optString("l360Token", ""),
                 l360RefreshMin = j.optInt("l360RefreshMin", 0), l360Enabled = j.optBoolean("l360Enabled", true),
+                mapboxToken = j.optString("mapboxToken", ""), mockMapStyle = j.optString("mockMapStyle", "streets"),
                 backupDaily = j.optBoolean("backupDaily", true), lastBackup = j.optLong("lastBackup", 0),
                 onboarded = j.optBoolean("onboarded", false),
                 motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
@@ -174,5 +179,5 @@ class SettingsStore(ctx: Context) {
     }
 
     /** Settings for backups, without secrets. */
-    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "", driveUri = "").toJson()
+    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "", driveUri = "", mapboxToken = "").toJson()
 }

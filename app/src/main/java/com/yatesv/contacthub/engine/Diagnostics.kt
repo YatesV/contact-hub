@@ -179,6 +179,60 @@ object Diagnostics {
             check("Life360", "Your location (for distance)") { if (Hub.l360.me()?.lat != null) pass("Found") else warn("Not found: distances won't show") }
         }
 
+        // ---- Mock location
+        MockStore.load()
+        check("Mock location", "Developer options") { if (MockSetup.devOptionsOn(ctx)) pass("On") else warn("Off: About phone → Software information → tap Build number 7 times") }
+        check("Mock location", "Selected mock app") {
+            if (MockSetup.isMockApp(ctx)) pass("Contact Hub is the mock location app") else warn("Not selected: Developer options → Select mock location app → Contact Hub")
+        }
+        check("Mock location", "Take over a test provider") {
+            if (!MockSetup.isMockApp(ctx)) info("Skipped (not the mock app yet)")
+            else MockSetup.canAddProvider(ctx).let { if (it == "ok") pass("Added and removed a throwaway provider") else fail(it) }
+        }
+        check("Mock location", "Providers on this phone") {
+            val lm = ctx.getSystemService(android.location.LocationManager::class.java)
+            info(lm.allProviders.joinToString() + " · will mock: " + MockSetup.providers.joinToString())
+        }
+        check("Mock location", "Running now") {
+            val st = MockStore.state.value
+            when {
+                st.active -> info("${st.item?.type} \"${st.item?.name}\"${if (st.paused) " (paused)" else ""}, progress ${st.progressSec.toInt()}/${st.totalSec.toInt()} s")
+                MockStore.session() != null -> warn("A session is saved but the service isn't running (it resumes after a restart, or tap Start again)")
+                else -> info("Off")
+            }
+        }
+        check("Mock location", "Route playback math") {
+            val a = com.yatesv.contacthub.data.LatLng(30.8466, -93.2891)
+            val path = listOf(a, com.yatesv.contacthub.data.MockMath.offset(a, 500.0, 0.0), com.yatesv.contacthub.data.MockMath.offset(a, 500.0, 500.0))
+            val plan = com.yatesv.contacthub.data.RoutePlan(path, 35.0)
+            val corner = plan.at(plan.totalSeconds * 0.5).speedMps
+            val mid = plan.at(plan.totalSeconds * 0.25).speedMps
+            val end = plan.play(plan.totalSeconds + 5, "stay")
+            if (end.done && corner < mid && plan.at(0.0).speedMps == 0f) pass("1 km L-route: ${plan.totalSeconds.toInt()} s, ${"%.0f".format(mid * 2.237)} mph straight, ${"%.0f".format(corner * 2.237)} mph at the corner")
+            else fail("Unexpected: corner=$corner mid=$mid done=${end.done}")
+        }
+        check("Mock location", "Location permission") { if (MockSetup.hasLocation(ctx)) pass("Granted (blue dot works)") else warn("Not granted: no blue dot / start from real location") }
+        check("Mock location", "Last real fix") { MockStore.lastReal()?.let { pass(stamp(it.second)) } ?: info("None yet") }
+        check("Mock location", "Exact alarms (schedules)") { if (MockSetup.canExactAlarm(ctx)) pass("Allowed") else warn("Not allowed: scheduled starts may be late") }
+        check("Mock location", "Saved") { info("${MockStore.favorites.value.size} favorites, ${MockStore.history.value.size} recent, ${MockStore.schedules.value.size} scheduled") }
+        check("Mock location", "Map tiles") {
+            val (r, ms) = timed { MockApi.ping(MockApi.tileTestUrl()) }
+            val src = if (MockApi.hasMapbox) "Mapbox" else "OpenStreetMap (no Mapbox token)"
+            if (r == "HTTP 200") pass("$src $r in $ms ms") else fail("$src $r")
+        }
+        check("Mock location", "Snap to roads") {
+            val a = com.yatesv.contacthub.data.LatLng(30.8466, -93.2891)
+            val (r, ms) = timed {
+                val (line, err) = MockApi.snap(listOf(a, com.yatesv.contacthub.data.MockMath.offset(a, 800.0, 400.0)), "car")
+                err ?: "${line.size} points"
+            }
+            if (r.endsWith("points")) pass("${if (MockApi.hasMapbox) "Mapbox" else "OSRM"}: $r in $ms ms") else warn(r)
+        }
+        check("Mock location", "Elevation") {
+            val (r, ms) = timed { MockApi.elevation(listOf(com.yatesv.contacthub.data.LatLng(30.8466, -93.2891)))?.firstOrNull()?.let { "%.0f m".format(it) } ?: "failed" }
+            if (r != "failed") pass("$r in $ms ms") else warn("Open-Meteo didn't answer: altitude won't be set")
+        }
+
         // ---- Database
         check("Database", "Read/write") {
             val dao = Hub.db.dao()

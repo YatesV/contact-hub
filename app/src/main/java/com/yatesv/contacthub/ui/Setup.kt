@@ -1,6 +1,7 @@
 package com.yatesv.contacthub.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
@@ -111,40 +112,75 @@ fun openListener(ctx: Context) {
 fun openAppInfo(ctx: Context) = ctx.startActivity(
     Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 
-private enum class Step { WELCOME, PERMS, ACCESS, LISTENER, DEFAULT_SMS, PHONE, ACCOUNTS, DONE }
+/** One thing Android needs before Orbit works. Checked live, so the list updates as you come back. */
+data class SetupItem(
+    val id: String, val title: String, val why: String, val button: String,
+    val done: Boolean, val optional: Boolean = false, val restricted: Boolean = false,
+)
+
+object SetupCheck {
+    /**
+     * Android 13+ blocks accessibility, notification access (and on Android 15, texts/call log) for apps
+     * installed from a file until you tap ⋮ → "Allow restricted settings" on Orbit's App info.
+     * true = unlocked, false = still locked, null = this phone doesn't say.
+     */
+    fun restrictedUnlocked(ctx: Context): Boolean? = runCatching {
+        if (Build.VERSION.SDK_INT < 33) return true
+        val ops = ctx.getSystemService(android.app.AppOpsManager::class.java)
+        when (ops.unsafeCheckOpNoThrow("android:access_restricted_settings", android.os.Process.myUid(), ctx.packageName)) {
+            android.app.AppOpsManager.MODE_ALLOWED, android.app.AppOpsManager.MODE_DEFAULT -> true
+            else -> false
+        }
+    }.getOrNull()
+
+    fun batteryOk(ctx: Context) = ctx.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
+    fun googleMessagesInstalled(ctx: Context) = com.yatesv.contacthub.engine.Sender.installed(ctx, com.yatesv.contacthub.engine.GOOGLE_MESSAGES)
+    fun googleMessagesDefault(ctx: Context) = android.provider.Telephony.Sms.getDefaultSmsPackage(ctx) == com.yatesv.contacthub.engine.GOOGLE_MESSAGES
+
+    /** Everything to do, in the order that works (unlock first, or the other switches stay greyed out). */
+    fun items(ctx: Context, hubMode: Boolean): List<SetupItem> {
+        val rm = ctx.getSystemService(RoleManager::class.java)
+        val needsRestricted = if (hubMode) !permsGranted(ctx) else !(MessagesAccessibility.enabledInSettings(ctx) && listenerOn(ctx) && permsGranted(ctx))
+        val unlocked = restrictedUnlocked(ctx)
+        val out = ArrayList<SetupItem>()
+        // Only shown when this phone says it's locked and something still needs it
+        if (unlocked == false && needsRestricted) out += SetupItem("unlock", "Unlock Orbit (one time)",
+            "Android locks some switches for apps installed from a file. This unlocks them.", "Unlock", false, restricted = true)
+        out += SetupItem("perms", "Allow texts, contacts and calls", "So Orbit can show and send your texts, contacts and calls.", "Allow", permsGranted(ctx))
+        if (!hubMode) {
+            if (!googleMessagesInstalled(ctx)) out += SetupItem("gm_install", "Install Google Messages",
+                "Orbit sends your texts through it, so they go out over RCS.", "Get Google Messages", false)
+            else out += SetupItem("gm_default", "Google Messages as your texting app",
+                "It handles RCS in the background. Orbit is what you use.", "Set it", googleMessagesDefault(ctx))
+            out += SetupItem("access", "Turn on the RCS sender", "Lets Orbit tap Send inside Google Messages for you.", "Turn on",
+                MessagesAccessibility.enabledInSettings(ctx))
+            out += SetupItem("listener", "Turn on notification access", "Lets Orbit see RCS messages and reply through Google Messages.", "Turn on", listenerOn(ctx))
+        } else {
+            out += SetupItem("sms", "Make Orbit your texting app", "Orbit sends and receives all texts and picture messages itself.", "Set as default", HubSms.isDefault(ctx))
+        }
+        out += SetupItem("battery", "Keep Orbit running", "Stops Samsung from putting Orbit to sleep, so texts and the RCS sender keep working.", "Allow", batteryOk(ctx))
+        if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) out += SetupItem("phone", "Orbit as your phone app", "Orbit's call screen, spam warnings and blocking.", "Set as default",
+            rm.isRoleHeld(RoleManager.ROLE_DIALER), optional = true)
+        return out
+    }
+}
+
+private enum class Page { WELCOME, CHECKLIST, EXTRAS, DONE }
 
 /**
- * Full-screen, one-step-at-a-time setup. Each step shows a picture of where to tap,
- * notices when you come back with it done, and moves on by itself.
+ * Easy setup: pick a mode, then one screen with one big button that always does the next thing.
+ * Every item checks itself when you come back, so there's nothing to remember.
  */
 @Composable
 fun SetupWizard(first: Boolean) {
     val ctx = LocalContext.current
     val view = LocalView.current
-    val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
     var hubMode by remember { mutableStateOf(HubSms.isDefault(ctx)) }
-    val steps = remember(hubMode) {
-        if (hubMode) listOf(Step.WELCOME, Step.PERMS, Step.DEFAULT_SMS, Step.PHONE, Step.ACCOUNTS, Step.DONE)
-        else listOf(Step.WELCOME, Step.PERMS, Step.ACCESS, Step.LISTENER, Step.PHONE, Step.ACCOUNTS, Step.DONE)
-    }
-    var index by remember { mutableIntStateOf(0) }
+    var page by remember { mutableStateOf(if (first) Page.WELCOME else Page.CHECKLIST) }
     var forward by remember { mutableStateOf(true) }
-    val step = steps[index.coerceIn(0, steps.lastIndex)]
-    val rm = ctx.getSystemService(RoleManager::class.java)
-
-    @Suppress("UNUSED_EXPRESSION") tick
-    fun done(s: Step): Boolean = when (s) {
-        Step.PERMS -> permsGranted(ctx)
-        Step.ACCESS -> MessagesAccessibility.running()
-        Step.LISTENER -> listenerOn(ctx)
-        Step.DEFAULT_SMS -> HubSms.isDefault(ctx)
-        Step.PHONE -> rm.isRoleHeld(RoleManager.ROLE_DIALER)
-        else -> false
-    }
-    fun next() { forward = true; if (index < steps.lastIndex) index++ }
-    fun prev() { forward = false; if (index > 0) index-- }
+    fun go(p: Page) { forward = p.ordinal > page.ordinal; page = p }
     fun finish() {
         Hub.settings.update { it.copy(onboarded = true, setupVersion = SETUP_VERSION) }
         HubApp.scheduleWork(Hub.app)
@@ -152,10 +188,18 @@ fun SetupWizard(first: Boolean) {
     }
     var life360 by remember { mutableStateOf(false) }
     var friends by remember { mutableStateOf<com.yatesv.contacthub.data.Social?>(null) }
-    BackHandler(index > 0 || life360 || friends != null) { if (life360) life360 = false else if (friends != null) friends = null else prev() }
+    BackHandler(page != Page.WELCOME || life360 || friends != null) {
+        when {
+            life360 -> life360 = false
+            friends != null -> friends = null
+            page == Page.CHECKLIST && first -> go(Page.WELCOME)
+            page == Page.EXTRAS -> go(Page.CHECKLIST)
+            page == Page.DONE -> go(Page.EXTRAS)
+            else -> finish()
+        }
+    }
     if (life360) { Life360SignInScreen(onDone = { life360 = false }); return }
     friends?.let { f ->
-        // Inside the wizard there's no back stack yet, so show sync here and come back after
         Column(Modifier.fillMaxSize()) {
             TextButton({ friends = null }, Modifier.statusBarsPadding()) { Text("← Back to setup") }
             Box(Modifier.weight(1f)) { FriendSyncScreen(f) }
@@ -163,86 +207,149 @@ fun SetupWizard(first: Boolean) {
         return
     }
 
+    @Suppress("UNUSED_EXPRESSION") tick
+    val items = SetupCheck.items(ctx, hubMode)
+    val required = items.filter { !it.optional }
+    val doneCount = required.count { it.done }
+    val next = items.firstOrNull { !it.done && !it.optional } ?: items.firstOrNull { !it.done }
+
     var permsBlocked by remember { mutableStateOf(false) }
+    var unlockStage by remember { mutableIntStateOf(0) }
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
-        // Android 15 blocks SMS/call-log permissions for apps installed from a file until "restricted settings" are allowed
         permsBlocked = res.filterKeys { it.contains("SMS") || it.contains("CALL_LOG") }.values.any { !it }
         tick++; Hub.changed()
     }
     val role = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { tick++ }
+    val rm = ctx.getSystemService(RoleManager::class.java)
 
-    // Came back with the step done: tick, then move on by itself
-    val isDone = done(step)
-    LaunchedEffect(step, isDone) {
-        if (isDone && step !in setOf(Step.WELCOME, Step.ACCOUNTS, Step.DONE)) {
-            Haptics.confirm(view); delay(800); next()
+    fun run(item: SetupItem) {
+        Haptics.tap(view)
+        when (item.id) {
+            "unlock" -> if (unlockStage == 0) { unlockStage = 1; openAccessibility(ctx) } else { unlockStage = 2; openAppInfo(ctx) }
+            "perms" -> if (permsBlocked && SetupCheck.restrictedUnlocked(ctx) != true) openAppInfo(ctx) else perms.launch(setupPerms)
+            "gm_install" -> runCatching {
+                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${com.yatesv.contacthub.engine.GOOGLE_MESSAGES}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            "gm_default" -> runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            "access" -> openAccessibility(ctx)
+            "listener" -> openListener(ctx)
+            "sms" -> if (rm.isRoleAvailable(RoleManager.ROLE_SMS)) role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
+            "battery" -> runCatching {
+                @SuppressLint("BatteryLife")
+                val i = Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure { runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            "phone" -> role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER))
         }
+    }
+
+    // Everything required done: buzz once and move on by itself
+    LaunchedEffect(page, doneCount == required.size) {
+        if (page == Page.CHECKLIST && doneCount == required.size && required.isNotEmpty()) { Haptics.confirm(view); delay(900); go(Page.EXTRAS) }
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            LinearProgressIndicator({ (index + 1f) / steps.size }, Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)))
-            if (step != Step.DONE) TextButton({ finish() }) { Text(if (first) "Skip setup" else "Close") }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            LinearProgressIndicator({ (page.ordinal + if (page == Page.CHECKLIST) doneCount.toFloat() / required.size.coerceAtLeast(1) else 0f) / 3f },
+                Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)))
+            if (page != Page.DONE) TextButton({ finish() }) { Text(if (first) "Skip" else "Close") }
         }
-        AnimatedContent(step, Modifier.weight(1f), label = "setup", transitionSpec = {
+        AnimatedContent(page, Modifier.weight(1f), label = "setup", transitionSpec = {
             val dir = if (forward) 1 else -1
             (slideInHorizontally(Motion.spec()) { it * dir } + fadeIn()) togetherWith (slideOutHorizontally(Motion.spec()) { -it * dir / 3 } + fadeOut())
-        }) { s ->
+        }) { p ->
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                when (s) {
-                    Step.WELCOME -> Welcome(hubMode) { hubMode = it }
-                    Step.PERMS -> StepPage("Allow access", "So Orbit can show your texts, contacts and calls. Tap the button and choose Allow on each one.",
-                        done(s), { PhoneMock(listOf("Allow Orbit to send and view SMS?"), dialog = true) }) {
-                        Button({ perms.launch(setupPerms) }, Modifier.fillMaxWidth()) { Text("Allow") }
-                        if (permsBlocked) {
-                            Text("Android blocked texts/calls access (\"App was denied access to SMS\"). That's normal for apps installed from a file. Unlock it once:",
-                                Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-                            Text("Tap Unlock → ⋮ (top right) → Allow restricted settings → confirm → come back and tap Allow again.",
-                                Modifier.padding(vertical = 8.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
-                            PhoneMock(listOf("App info", "Orbit"), menu = true)
-                            OutlinedButton({ openAppInfo(ctx) }, Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Unlock") }
-                        }
-                    }
-                    Step.ACCESS -> StepPage("Turn on the RCS sender",
-                        "This lets Orbit tap Send inside Google Messages, so your texts go over RCS. Tap Open, then switch on \"Orbit RCS sender\".",
-                        done(s), { PhoneMock(listOf("Installed apps", "Orbit RCS sender"), highlight = 1, toggle = true) }) {
-                        Button({ openAccessibility(ctx) }, Modifier.fillMaxWidth()) { Text("Open") }
-                        RestrictedHelp(ctx)
-                    }
-                    Step.LISTENER -> StepPage("Turn on notification access",
-                        "Lets Orbit see RCS messages and reply through Google Messages. Tap Open and switch on Orbit.",
-                        done(s), { PhoneMock(listOf("Notification read, reply and control", "Orbit"), highlight = 1, toggle = true) }) {
-                        Button({ openListener(ctx) }, Modifier.fillMaxWidth()) { Text("Open") }
-                        RestrictedHelp(ctx)
-                    }
-                    Step.DEFAULT_SMS -> StepPage("Make Orbit your texting app",
-                        "In Orbit mode it sends and receives all texts and picture messages itself. There's no RCS in this mode.",
-                        done(s), { PhoneMock(listOf("Set Orbit as your default SMS app?", "Google Messages", "Orbit"), highlight = 2, dialog = true) }) {
-                        Button({
-                            if (rm.isRoleAvailable(RoleManager.ROLE_SMS)) role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
-                        }, Modifier.fillMaxWidth()) { Text("Set as default") }
-                    }
-                    Step.PHONE -> StepPage("Default phone app (optional)",
-                        "Gives you Orbit's call screen and lets you block numbers. You can skip this.",
-                        done(s), { PhoneMock(listOf("Set Orbit as your default phone app?", "Phone", "Orbit"), highlight = 2, dialog = true) }) {
-                        if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) Button({ role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER)) }, Modifier.fillMaxWidth()) { Text("Set as default") }
-                        TextButton({ next() }) { Text("Skip") }
-                    }
-                    Step.ACCOUNTS -> AccountsStep({ life360 = true }, { friends = it })
-                    Step.DONE -> DonePage()
+                when (p) {
+                    Page.WELCOME -> Welcome(hubMode) { hubMode = it }
+                    Page.CHECKLIST -> Checklist(items, next, doneCount, required.size, unlockStage, permsBlocked, ::run)
+                    Page.EXTRAS -> AccountsStep({ life360 = true }, { friends = it })
+                    Page.DONE -> DonePage()
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            if (index > 0) OutlinedButton({ prev() }) { Text("Back") } else Spacer(Modifier.width(1.dp))
-            when (step) {
-                Step.DONE -> Button({ finish() }) { Text("Start using Orbit") }
-                Step.WELCOME, Step.ACCOUNTS -> Button({ next() }) { Text("Next") }
-                else -> Button({ next() }) { Text(if (done(step)) "Next" else "Do this later") }
+        // One big button that always does the right next thing
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
+            when (page) {
+                Page.WELCOME -> BigButton("Get started") { go(Page.CHECKLIST) }
+                Page.CHECKLIST -> {
+                    if (next != null && !(next.optional && doneCount == required.size)) BigButton(
+                        when {
+                            next.id == "unlock" && unlockStage == 0 -> "Step 1: Try the switch"
+                            next.id == "unlock" -> "Step 2: Unlock"
+                            next.id == "perms" && permsBlocked -> "Unlock texts access"
+                            else -> next.button + " · " + next.title.substringBefore(" (")
+                        }) { run(next) }
+                    else BigButton("Next") { go(Page.EXTRAS) }
+                    TextButton({ go(Page.EXTRAS) }, Modifier.align(Alignment.CenterHorizontally)) {
+                        Text(if (doneCount == required.size) "Continue" else "Do the rest later")
+                    }
+                }
+                Page.EXTRAS -> BigButton("Next") { go(Page.DONE) }
+                Page.DONE -> BigButton("Start using Orbit") { finish() }
             }
         }
     }
-    @Suppress("UNUSED_EXPRESSION") scope
+}
+
+@Composable
+private fun BigButton(label: String, onClick: () -> Unit) {
+    Button(onClick, Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(18.dp)) { Text(label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+}
+
+@Composable
+private fun Checklist(items: List<SetupItem>, next: SetupItem?, done: Int, total: Int, unlockStage: Int, permsBlocked: Boolean, run: (SetupItem) -> Unit) {
+    Spacer(Modifier.height(8.dp))
+    // Progress ring
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(120.dp)) {
+        val anim by androidx.compose.animation.core.animateFloatAsState(done.toFloat() / total.coerceAtLeast(1), Motion.spec(), label = "ring")
+        androidx.compose.material3.CircularProgressIndicator({ anim }, Modifier.size(120.dp), strokeWidth = 10.dp,
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest, strokeCap = androidx.compose.ui.graphics.StrokeCap.Round)
+        if (done == total) Text("✓", fontSize = 48.sp, color = Color(0xFF34C759), fontWeight = FontWeight.Bold)
+        else Text("$done/$total", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+    }
+    Text(if (done == total) "All set!" else "Tap the big button. Orbit checks each one for you.",
+        Modifier.padding(vertical = 12.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    items.forEach { it ->
+        val isNext = it == next
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(16.dp))
+            .background(if (isNext) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = !it.done) { run(it) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp).clip(CircleShape).background(if (it.done) Color(0xFF34C759) else if (isNext) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                contentAlignment = Alignment.Center) {
+                Text(if (it.done) "✓" else if (it.optional) "·" else "", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(it.title + if (it.optional) " (optional)" else "", style = MaterialTheme.typography.titleSmall,
+                    color = if (it.done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                if (!it.done) Text(it.why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        // Picture + exact taps for the item you're on
+        if (isNext && !it.done) Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            when (it.id) {
+                "unlock" -> {
+                    Text(if (unlockStage == 0) "Tap \"Step 1\". On the next screen, tap the switch. Android says \"Restricted setting\". Tap OK and come back."
+                        else "Now tap \"Step 2\". Tap ⋮ in the top right → Allow restricted settings → confirm. Then come back.",
+                        textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    if (unlockStage == 0) PhoneMock(listOf("Orbit RCS sender", "Use Orbit RCS sender"), highlight = 1, toggle = true)
+                    else PhoneMock(listOf("App info", "Orbit"), menu = true)
+                }
+                "perms" -> if (permsBlocked) {
+                    Text("Android blocked texts access. That's normal for apps installed from a file: tap the button, then ⋮ → Allow restricted settings, then come back.",
+                        textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(8.dp)); PhoneMock(listOf("App info", "Orbit"), menu = true)
+                } else PhoneMock(listOf("Allow Orbit to send and view SMS?"), dialog = true)
+                "access" -> PhoneMock(listOf("Installed apps", "Orbit RCS sender"), highlight = 1, toggle = true)
+                "listener" -> PhoneMock(listOf("Notification read, reply and control", "Orbit"), highlight = 1, toggle = true)
+                "gm_default" -> PhoneMock(listOf("Default apps", "SMS app: Messages"), highlight = 1)
+                "sms" -> PhoneMock(listOf("Set Orbit as your default SMS app?", "Google Messages", "Orbit"), highlight = 2, dialog = true)
+                "battery" -> PhoneMock(listOf("Let app always run in background?", "Allow"), highlight = 1, dialog = true)
+                "phone" -> PhoneMock(listOf("Set Orbit as your default phone app?", "Phone", "Orbit"), highlight = 2, dialog = true)
+            }
+        }
+    }
 }
 
 @Composable
@@ -250,7 +357,7 @@ private fun Welcome(hubMode: Boolean, onMode: (Boolean) -> Unit) {
     Spacer(Modifier.height(16.dp))
     Text("👋", fontSize = 56.sp)
     Text("Welcome to Orbit", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
-    Text("Texts, contacts, calls, socials and Life360 in one place. First, pick how texting works:",
+    Text("Texts, contacts, calls, socials and Life360 in one place. Setup takes about a minute. Pick how texting works (the first one is best for most people):",
         Modifier.padding(vertical = 12.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
     ModeCard("Google Messages mode", "Recommended",
         "Keeps RCS: typing dots, read receipts, HD photos, reactions. Google Messages stays installed and does the sending in the background.",
@@ -322,6 +429,7 @@ private fun AccountsStep(openLife360: () -> Unit, openFriends: (com.yatesv.conta
     val s by Hub.settings.flow.collectAsState()
     var found by remember { mutableStateOf<List<SocialImport.Found>?>(null) }
     var imported by remember { mutableIntStateOf(-1) }
+    var locTick by remember { mutableIntStateOf(0) }
     val drive = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) connectDrive(ctx, uri)
     }
@@ -330,6 +438,12 @@ private fun AccountsStep(openLife360: () -> Unit, openFriends: (com.yatesv.conta
     Text("🔗", fontSize = 52.sp)
     Text("Connect your stuff", style = MaterialTheme.typography.headlineSmall)
     Text("All optional. You can do these later in Settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+    val loc = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { locTick++ }
+    @Suppress("UNUSED_EXPRESSION") locTick
+    val hasLoc = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    AccountRow("🧭", "Location", if (hasLoc) "Allowed" else "For arrival texts, the mock location map and \"go to my location\"", hasLoc) {
+        loc.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
     AccountRow("📍", "Life360", if (s.l360Token.isNotBlank()) "Connected" else "Sign in on Life360's own page, right here", s.l360Token.isNotBlank()) { openLife360() }
     AccountRow("👥", "Socials from your contacts",
         when { imported >= 0 -> "Added $imported"; found == null -> "Looking…"; found!!.isEmpty() -> "None saved in your contacts"; else -> "Found ${found!!.size}. Tap to add them" },

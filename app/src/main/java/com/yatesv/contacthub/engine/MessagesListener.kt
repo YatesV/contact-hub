@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
  *  - shows its own notifications instead of the Messages app's (optional),
  *  - runs auto-reply.
  */
+/** Groups built from recent senders only: sending must go through Google Messages' own reply button. */
+fun isPartialGroup(ctx: android.content.Context, key: String) =
+    ctx.getSharedPreferences("listener", android.content.Context.MODE_PRIVATE).getStringSet("partial", emptySet())!!.contains(key)
+
 class MessagesListener : NotificationListenerService() {
 
     private val prefs by lazy { getSharedPreferences("listener", Context.MODE_PRIVATE) }
@@ -92,11 +96,24 @@ class MessagesListener : NotificationListenerService() {
         }
     }
 
+    /** A group whose full member list we don't know (only who talked recently). */
+    private fun markPartial(key: String) = prefs.edit().putStringSet("partial", prefs.getStringSet("partial", emptySet())!! + key).apply()
+
     /** Match a notification to a conversation: by phone number when we have one, by contact name otherwise. */
     private fun convKeyFor(title: String, people: List<androidx.core.app.Person?>, isGroup: Boolean): String {
         if (isGroup) {
+            // Same group = same chat, no matter who talked last (it used to split by recent senders)
+            if (title.isNotBlank()) prefs.getString("grp:$title", null)?.let { return it }
             val numbers = people.mapNotNull { p -> numberOf(p) }.distinct()
-            return if (numbers.size >= 2) Phone.convKey(numbers) else "g:$title"
+            val key = if (numbers.size >= 2) {
+                val wanted = numbers.map { Phone.norm(it) }.toSet()
+                // An existing group text that has everyone who's talking in it = the real group
+                com.yatesv.contacthub.ui.InboxData.cache?.filter { it.isGroup && it.addresses.map { a -> Phone.norm(a) }.containsAll(wanted) }
+                    ?.singleOrNull()?.key
+                    ?: Phone.convKey(numbers).also { markPartial(it) }
+            } else "g:$title"
+            if (title.isNotBlank()) prefs.edit().putString("grp:$title", key).apply()
+            return key
         }
         people.firstNotNullOfOrNull { numberOf(it) }?.let { return Phone.convKey(listOf(it)) }
         Hub.contacts.byName(title)?.let { return Phone.convKey(listOf(it.number)) }

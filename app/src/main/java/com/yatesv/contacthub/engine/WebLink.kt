@@ -66,7 +66,7 @@ object WebLink {
 }
 
 class WebLinkService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> HubLog.w("WebLink", "job failed", e) })
     private var server: ServerSocket? = null
     private var idle: kotlinx.coroutines.Job? = null
 
@@ -85,6 +85,7 @@ class WebLinkService : Service() {
         if (WebLink.state.value.pin.isBlank()) { stopSelf(); return START_NOT_STICKY } // restarted without a session
         WebLink.state.value = WebLink.state.value.copy(on = true, url = url)
         val n = NotificationCompat.Builder(this, ch).setSmallIcon(R.drawable.ic_tile).setOngoing(true)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setContentTitle("Laptop access is on").setContentText(if (url.isBlank()) "Connect to Wi-Fi" else "$url · code ${WebLink.state.value.pin}")
             .setContentIntent(open).addAction(R.drawable.ic_tile, "Turn off", stop).build()
         ServiceCompat.startForeground(this, 7502, n, if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
@@ -98,7 +99,9 @@ class WebLinkService : Service() {
 
     private fun serve() {
         runCatching {
-            ServerSocket(WebLink.PORT).use { ss ->
+            // Only on the Wi-Fi address (never on mobile data, which can also hand out 10.x addresses)
+            val ip = WebLink.ipAddress(this) ?: return
+            ServerSocket(WebLink.PORT, 16, java.net.InetAddress.getByName(ip)).use { ss ->
                 server = ss
                 while (scope.isActive) {
                     val sock = ss.accept()
@@ -120,22 +123,33 @@ class WebLinkService : Service() {
         while (true) { val h = readLine(input) ?: break; if (h.isEmpty()) break; h.indexOf(':').takeIf { it > 0 }?.let { headers[h.substring(0, it).lowercase()] = h.substring(it + 1).trim() } }
         val len = headers["content-length"]?.toIntOrNull()?.coerceAtMost(64_000) ?: 0
         val body = if (len > 0) String(ByteArray(len).also { var r = 0; while (r < len) { val n = input.read(it, r, len - r); if (n < 0) break; r += n } }) else ""
+        val host = headers["host"].orEmpty()
+        val myIp = WebLink.ipAddress(this)
+        if (myIp == null || host != "$myIp:${WebLink.PORT}") return respond(sock, 403, "text/plain", "Open the address shown in Orbit")
         val authed = WebLink.token.isNotEmpty() && headers["authorization"] == "Bearer ${WebLink.token}"
         val route = path.substringBefore('?')
         val query = path.substringAfter('?', "").split('&').mapNotNull { p -> p.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to java.net.URLDecoder.decode(it[1], "UTF-8") } }.toMap()
         when {
             method == "GET" && route == "/" -> respond(sock, 200, "text/html; charset=utf-8", PAGE)
             method == "POST" && route == "/api/login" -> {
-                val now = System.currentTimeMillis()
-                if (now < WebLink.lockedUntil) return respond(sock, 429, "application/json", """{"error":"Too many tries. Wait a minute."}""")
                 val pin = runCatching { JSONObject(body).optString("pin") }.getOrDefault("")
-                if (pin == WebLink.state.value.pin) {
-                    WebLink.token = WebLink.newToken(); WebLink.badTries = 0; WebLink.lastUse = now
-                    WebLink.state.value = WebLink.state.value.copy(clients = 1)
-                    respond(sock, 200, "application/json", JSONObject().put("token", WebLink.token).toString())
-                } else {
-                    if (++WebLink.badTries >= 5) { WebLink.lockedUntil = now + 60_000; WebLink.badTries = 0 }
-                    respond(sock, 401, "application/json", """{"error":"Wrong code"}""")
+                // One login check at a time, so parallel guesses can't skip the 5-tries limit
+                val token = synchronized(WebLink) {
+                    val now = System.currentTimeMillis()
+                    when {
+                        now < WebLink.lockedUntil -> "LOCKED"
+                        pin.length == 6 && WebLink.state.value.pin.length == 6 && pin == WebLink.state.value.pin -> {
+                            WebLink.token = WebLink.newToken(); WebLink.badTries = 0; WebLink.lastUse = now
+                            WebLink.state.value = WebLink.state.value.copy(clients = 1)
+                            WebLink.token
+                        }
+                        else -> { if (++WebLink.badTries >= 5) { WebLink.lockedUntil = now + 60_000; WebLink.badTries = 0 }; "" }
+                    }
+                }
+                when (token) {
+                    "LOCKED" -> respond(sock, 429, "application/json", """{"error":"Too many tries. Wait a minute."}""")
+                    "" -> respond(sock, 401, "application/json", """{"error":"Wrong code"}""")
+                    else -> respond(sock, 200, "application/json", JSONObject().put("token", token).toString())
                 }
             }
             !authed -> respond(sock, 401, "application/json", """{"error":"Sign in"}""")
@@ -148,7 +162,7 @@ class WebLinkService : Service() {
                 if (key.isBlank() || text.isBlank() || text.length > 2000) return respond(sock, 400, "application/json", """{"error":"Bad message"}""")
                 val hidden = runBlocking { Hub.db.dao().meta(key)?.hidden == true }
                 if (hidden) return respond(sock, 403, "application/json", """{"error":"Hidden chat"}""")
-                SendQueue.add(this, key, text)
+                SendQueue.add(this, key, text, drive = false)
                 respond(sock, 200, "application/json", """{"ok":true}""")
             }
             else -> respond(sock, 404, "text/plain", "Not found")

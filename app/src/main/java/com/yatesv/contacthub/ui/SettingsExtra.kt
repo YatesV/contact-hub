@@ -613,7 +613,7 @@ fun PrivacyDataPage() {
             style = MaterialTheme.typography.bodyMedium)
     }
     SectionTitle("Delete")
-    SettingRow("Delete all Orbit data", "Removes socials, notes, settings, logs, Life360 sign-in and backups. Your texts, contacts and calls stay.",
+    SettingRow("Delete all Orbit data", "Removes everything Orbit saved: socials, notes, groups, trails, arrival texts, mock places, sign-ins, settings, logs and backups. Your texts, contacts and calls stay.",
         onClick = { confirm = true })
     if (confirm) AlertDialog(
         onDismissRequest = { confirm = false },
@@ -625,9 +625,23 @@ fun PrivacyDataPage() {
 }
 
 private fun wipeAll(ctx: Context) {
+    // Stop things that keep data or run in the background
+    runCatching { com.yatesv.contacthub.engine.MockStore.stop(ctx) }
+    runCatching { com.yatesv.contacthub.engine.WebLink.stop(ctx) }
+    runCatching { Hub.orbit.arrivals().forEach { com.yatesv.contacthub.engine.Arrivals.unregister(ctx, it.id) } }
+    runCatching { androidx.work.WorkManager.getInstance(ctx).cancelAllWork() }
+    // Sign-ins kept by the in-app web pages (Life360, Instagram, TikTok)
+    runCatching { android.webkit.CookieManager.getInstance().removeAllCookies(null); android.webkit.CookieManager.getInstance().flush() }
+    runCatching { android.webkit.WebStorage.getInstance().deleteAllData() }
     runCatching { Hub.db.close() }
     ctx.deleteDatabase("hub.db")
-    listOf("settings", "life360", "rcs", "listener").forEach { ctx.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
+    // Every saved-settings file (groups, notes, trail, arrival texts, mock places, friend lists…), not just a few
+    java.io.File(ctx.applicationInfo.dataDir, "shared_prefs").listFiles()?.forEach { f ->
+        val name = f.name.removeSuffix(".xml")
+        runCatching { ctx.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit() }
+    }
+    runCatching { java.io.File(ctx.cacheDir, "previews").deleteRecursively() }
+    runCatching { java.io.File(ctx.filesDir, "last_crash.txt").delete() }
     runCatching { Backup.dir(ctx).deleteRecursively() }
     HubLog.clear()
     ctx.contentResolver.persistedUriPermissions.forEach { runCatching { ctx.contentResolver.releasePersistableUriPermission(it.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } }

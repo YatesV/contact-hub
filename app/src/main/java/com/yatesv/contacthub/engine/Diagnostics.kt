@@ -233,6 +233,12 @@ object Diagnostics {
             if (r != "failed") pass("$r in $ms ms") else warn("Open-Meteo didn't answer: altitude won't be set")
         }
 
+        // ---- Crashes
+        check("App", "Last crash") {
+            val c = CrashLog.last(ctx)
+            if (c == null) pass("None recorded") else warn(c.take(4000))
+        }
+
         // ---- Orbit extras
         check("Orbit", "App icon") { info(runCatching { com.yatesv.contacthub.ui.AppIcons.current(ctx) }.getOrDefault("?")) }
         check("Orbit", "Smart replies (on-device)") {

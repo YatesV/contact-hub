@@ -162,21 +162,12 @@ fun SetupContent() {
     val ctx = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
-    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++; Hub.changed() }
-    val role = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { tick++ }
     @Suppress("UNUSED_EXPRESSION") tick
-    val hub = HubSms.isDefault(ctx)
-    val rm = ctx.getSystemService(RoleManager::class.java)
-    Button({ Nav.go(Screen.Setup) }, Modifier.fillMaxWidth().padding(16.dp)) { Text("Open the step-by-step wizard") }
-    Check("Permissions", "Texts, contacts, calls, notifications", permsGranted(ctx)) { perms.launch(setupPerms) }
-    if (!hub) {
-        Check("RCS sender (accessibility)", if (MessagesAccessibility.enabledInSettings(ctx) && !MessagesAccessibility.running()) "On but not running: toggle it off and on" else "Taps Send in Google Messages for you", MessagesAccessibility.running()) { openAccessibility(ctx) }
-        Check("Notification access", "Sees RCS messages, replies through Google Messages", listenerOn(ctx)) { openListener(ctx) }
-        Check("Unlock restricted settings", "Only needed if the switches above are greyed out: ⋮ → Allow restricted settings", MessagesAccessibility.running() && listenerOn(ctx)) { openAppInfo(ctx) }
-    } else Check("Default texting app", "Orbit mode is on", true) {}
-    if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) Check("Default phone app (optional)", "Call screen and blocking", rm.isRoleHeld(RoleManager.ROLE_DIALER)) {
-        role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+    val items = SetupCheck.items(ctx, HubSms.isDefault(ctx))
+    Button({ Nav.go(Screen.Setup) }, Modifier.fillMaxWidth().padding(16.dp)) {
+        Text(if (items.all { it.done || it.optional }) "Everything's set ✓ · open setup" else "Finish setup (${items.count { !it.done && !it.optional }} left)")
     }
+    items.forEach { i -> Check(i.title + if (i.optional) " (optional)" else "", i.why, i.done) { Nav.go(Screen.Setup) } }
 }
 
 @Composable

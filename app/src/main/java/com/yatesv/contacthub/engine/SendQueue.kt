@@ -19,6 +19,8 @@ object SendQueue {
         val id: Long, val key: String, val body: String, val created: Long,
         /** waiting, sending, sent, failed */
         val state: String = "waiting", val error: String = "", val sentAt: Long = 0,
+        /** May open Google Messages to send (only from the Orbit screen, never from the laptop page) */
+        val drive: Boolean = true,
     )
 
     val items = MutableStateFlow<List<Item>>(emptyList())
@@ -26,8 +28,8 @@ object SendQueue {
     private var started = false
     private var nextId = System.currentTimeMillis()
 
-    @Synchronized fun add(ctx: Context, key: String, body: String): Item {
-        val item = Item(nextId++, key, body, System.currentTimeMillis())
+    @Synchronized fun add(ctx: Context, key: String, body: String, drive: Boolean = true): Item {
+        val item = Item(nextId++, key, body, System.currentTimeMillis(), drive = drive)
         items.update { it + item }
         start(ctx)
         wake.trySend(Unit)
@@ -56,7 +58,9 @@ object SendQueue {
                     continue
                 }
                 set(next.id) { it.copy(state = "sending") }
-                val r = runCatching { Sender.send(app, next.key, next.body) }.getOrElse { SendResult(false, Route.NONE, it.message ?: "Error") }
+                // Only drive Google Messages while you're looking at Orbit (not after you pressed Home)
+                val r = runCatching { Sender.send(app, next.key, next.body, allowDriving = next.drive && AppState.foreground) }
+                    .getOrElse { SendResult(false, Route.NONE, it.message ?: "Error") }
                 if (r.ok) set(next.id) { it.copy(state = "sent", sentAt = System.currentTimeMillis()) }
                 else {
                     HubLog.w("Queue", "send failed: ${r.error}")
@@ -66,4 +70,9 @@ object SendQueue {
             }
         }
     }
+}
+
+/** Whether an Orbit screen is in front right now. */
+object AppState {
+    @Volatile var foreground = false
 }

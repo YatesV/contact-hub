@@ -50,17 +50,12 @@ import kotlinx.coroutines.launch
 class PersonWidget : AppWidgetProvider() {
     override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
         val p = goAsync()
-        Hub.scope.launch { try { ids.forEach { draw(ctx, mgr, it) } } finally { p.finish() } }
+        Hub.scope.launch { try { ids.forEach { id -> runCatching { draw(ctx, mgr, id) } } } finally { p.finish() } }
     }
 
     override fun onDeleted(ctx: Context, ids: IntArray) { ids.forEach { Hub.orbit.setWidgetNumber(it, null) } }
 
-    override fun onReceive(ctx: Context, intent: Intent) {
-        if (intent.action == CALL) intent.getStringExtra("n")?.let { CallManager.place(ctx, it) } else super.onReceive(ctx, intent)
-    }
-
     companion object {
-        private const val CALL = "com.yatesv.contacthub.WIDGET_CALL"
 
         /** Redraw every person widget (after new messages). */
         fun refreshAll(ctx: Context) {
@@ -87,8 +82,10 @@ class PersonWidget : AppWidgetProvider() {
             v.setOnClickPendingIntent(R.id.root, PendingIntent.getActivity(ctx, id,
                 Intent(ctx, MainActivity::class.java).putExtra("conv", key).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            // Through Orbit's private receiver: the widget receiver has to be public, so it must not place calls
             v.setOnClickPendingIntent(R.id.call, PendingIntent.getBroadcast(ctx, id + 100_000,
-                Intent(ctx, PersonWidget::class.java).setAction(CALL).putExtra("n", number), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+                Intent(ctx, com.yatesv.contacthub.engine.ActionReceiver::class.java).setAction(com.yatesv.contacthub.engine.ActionReceiver.CALL).putExtra("n", number),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             mgr.updateAppWidget(id, v)
         }
 

@@ -148,18 +148,36 @@ class OrbitStore(ctx: Context) {
         put("trail", obj("trail").put(memberId, JSONArray().apply { list.forEach { put(JSONArray().put(it.t).put(it.lat).put(it.lng)) } }))
     }
 
+    // ---------------- Messages removed from Orbit (Google Messages mode can't delete from the phone) ----------------
+    fun hiddenMsgs(key: String): Set<String> = obj("hidden").optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
+    @Synchronized fun hideMsgs(key: String, msgKeys: Collection<String>) {
+        val all = (hiddenMsgs(key) + msgKeys).toList().takeLast(5000)
+        put("hidden", obj("hidden").put(key, JSONArray(all)))
+    }
+
+    // ---------------- GIF search ----------------
+    fun giphyKey(): String = prefs.getString("giphy", "").orEmpty()
+    fun setGiphyKey(k: String) { prefs.edit().putString("giphy", k.trim()).apply(); bump() }
+
+    /** Start recording automatically when a call connects */
+    fun autoRecordCalls(): Boolean = prefs.getBoolean("autoRecord", false)
+    fun setAutoRecordCalls(on: Boolean) { prefs.edit().putBoolean("autoRecord", on).apply(); bump() }
+    /** User has seen the "check the law where you live" note */
+    fun recordNoteSeen(): Boolean = prefs.getBoolean("recNote", false)
+    fun setRecordNoteSeen() { prefs.edit().putBoolean("recNote", true).apply() }
+
     // ---------------- Person widgets ----------------
     fun widgetNumber(id: Int): String? = prefs.getString("widget_$id", null)
     fun setWidgetNumber(id: Int, number: String?) = prefs.edit().apply { if (number == null) remove("widget_$id") else putString("widget_$id", number) }.apply()
 
     /** For backups. */
     fun exportJson(): JSONObject = JSONObject().apply {
-        for (k in listOf("snooze", "pins", "repeat", "nudge", "notes")) put(k, obj(k))
+        for (k in listOf("snooze", "pins", "repeat", "nudge", "notes", "hidden")) put(k, obj(k))
         for (k in listOf("groups", "spam", "arrive")) put(k, arr(k))
     }
     fun importJson(j: JSONObject) {
         val e = prefs.edit()
-        for (k in listOf("snooze", "pins", "repeat", "nudge", "notes", "groups", "spam", "arrive")) j.opt(k)?.let { e.putString(k, it.toString()) }
+        for (k in listOf("snooze", "pins", "repeat", "nudge", "notes", "hidden", "groups", "spam", "arrive")) j.opt(k)?.let { e.putString(k, it.toString()) }
         e.apply(); bump()
     }
 }

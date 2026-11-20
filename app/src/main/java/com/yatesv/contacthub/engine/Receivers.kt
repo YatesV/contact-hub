@@ -27,15 +27,16 @@ class ActionReceiver : BroadcastReceiver() {
             READ -> {
                 val pending = goAsync()
                 Hub.scope.launch {
-                    try { markRead(key); Notifier.cancel(ctx, key) } finally { pending.finish() }
+                    try { runCatching { markRead(key); Notifier.cancel(ctx, key) } } finally { pending.finish() }
                 }
             }
+            CALL -> intent.getStringExtra("n")?.takeIf { it.isNotBlank() }?.let { CallManager.place(ctx, it) }
             ANSWER -> CallManager.answer()
             DECLINE -> CallManager.hangup()
             AUTO_REPLY -> {
                 Hub.settings.update { it.copy(autoReplyOn = !it.autoReplyOn) }
                 val pending = goAsync()
-                Hub.scope.launch { try { HubWidget.draw(ctx) } finally { pending.finish() } }
+                Hub.scope.launch { try { runCatching { HubWidget.draw(ctx) } } finally { pending.finish() } }
             }
         }
     }
@@ -44,6 +45,7 @@ class ActionReceiver : BroadcastReceiver() {
         const val REPLY = "com.yatesv.contacthub.REPLY"
         const val READ = "com.yatesv.contacthub.READ"
         const val ANSWER = "com.yatesv.contacthub.ANSWER"
+        const val CALL = "com.yatesv.contacthub.CALL"
         const val DECLINE = "com.yatesv.contacthub.DECLINE"
         const val AUTO_REPLY = "com.yatesv.contacthub.AUTO_REPLY"
 
@@ -61,12 +63,16 @@ class ActionReceiver : BroadcastReceiver() {
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            HubApp.scheduleWork(ctx)
-            ScheduleWorker.enqueue(ctx, 0)
-            MockStore.onBoot(ctx)
-            Arrivals.sync(ctx)
-            DailyWorker.schedule(ctx)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED -> {
+                HubApp.scheduleWork(ctx)
+                ScheduleWorker.enqueue(ctx, 0)
+                MockStore.onBoot(ctx)
+                Arrivals.syncAll(ctx)
+                DailyWorker.schedule(ctx)
+            }
+            // An update clears Android's location alerts for Orbit: register them again
+            Intent.ACTION_MY_PACKAGE_REPLACED -> { Arrivals.syncAll(ctx); DailyWorker.schedule(ctx) }
         }
     }
 }

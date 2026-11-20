@@ -139,6 +139,7 @@ interface HubDao {
     /** Sends that got cut off (phone restarted mid-send) are marked failed rather than retried, to avoid doubles. */
     @Query("UPDATE Scheduled SET status = 'failed' WHERE status = 'sending' AND sendAt < :before") suspend fun failStuckScheduled(before: Long): Int
     @Query("DELETE FROM Scheduled WHERE id = :id") suspend fun deleteScheduled(id: Long)
+    @Query("SELECT * FROM Scheduled WHERE status = 'sending'") suspend fun sendingScheduled(): List<Scheduled>
 
     @Query("SELECT * FROM Folder ORDER BY sort, id") fun foldersFlow(): Flow<List<Folder>>
     @Query("SELECT * FROM Folder") suspend fun allFolders(): List<Folder>

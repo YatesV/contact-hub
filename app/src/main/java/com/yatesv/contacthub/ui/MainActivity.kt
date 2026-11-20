@@ -89,16 +89,19 @@ object Nav {
     /** Text to put in the box when a chat opens (from another app's "send SMS" link). */
     val drafts = mutableMapOf<String, String>()
     val top get() = stack.last()
+    /** When Orbit last went to the background. Kept here so a dark-mode/rotation restart can't skip the lock. */
+    var pausedAt = 0L
 }
 
 class MainActivity : FragmentActivity() {
-    private var pausedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) Nav.tab = Hub.settings.value.startTab
-        handle(intent)
+        // Only the first time: after a rotation/dark-mode restart Android hands the same intent back,
+        // which used to throw you into that chat again
+        if (savedInstanceState == null) handle(intent)
         setContent {
             HubTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -109,7 +112,7 @@ class MainActivity : FragmentActivity() {
                             Nav.locked = false
                             if (Nav.openHiddenAfterUnlock) { Nav.openHiddenAfterUnlock = false; Nav.hiddenUnlocked = true; Nav.go(Screen.Hidden) }
                         }
-                        else -> { AppRoot(); PanicShake(this@MainActivity) }
+                        else -> { AppRoot(); PanicShake(this@MainActivity); CrashReportDialog() }
                     }
                 }
             }
@@ -121,12 +124,20 @@ class MainActivity : FragmentActivity() {
         handle(intent)
     }
 
-    override fun onPause() { super.onPause(); pausedAt = System.currentTimeMillis() }
+    override fun onPause() {
+        super.onPause()
+        Nav.pausedAt = System.currentTimeMillis()
+        com.yatesv.contacthub.engine.AppState.foreground = false
+        // You left: new messages in the chat that was open should notify again
+        Hub.openConv = ""
+    }
 
     override fun onResume() {
         super.onResume()
         val s = Hub.settings.value
-        if (s.appLock && pausedAt > 0 && System.currentTimeMillis() - pausedAt > s.lockAfterSec * 1000L) {
+        com.yatesv.contacthub.engine.AppState.foreground = true
+        com.yatesv.contacthub.engine.MockStore.resumeIfNeeded(this)
+        if (s.appLock && Nav.pausedAt > 0 && System.currentTimeMillis() - Nav.pausedAt > s.lockAfterSec * 1000L) {
             Nav.locked = true
             Nav.hiddenUnlocked = false
             if (Nav.top == Screen.Hidden) Nav.back()
@@ -204,7 +215,7 @@ class MainActivity : FragmentActivity() {
 private fun Uri.getQueryParameterSafe(k: String): String? =
     runCatching { Uri.parse("x://y?" + schemeSpecificPart.substringAfter('?', "")).getQueryParameter(k) }.getOrNull()
 
-const val SETUP_VERSION = 2
+const val SETUP_VERSION = 3
 
 /** Lets photos fly between screens (shared element transitions). */
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)

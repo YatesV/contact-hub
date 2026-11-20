@@ -107,7 +107,7 @@ class InstallReceiver : BroadcastReceiver() {
                 val pi = PendingIntent.getActivity(ctx, 4322, confirm, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 val n = androidx.core.app.NotificationCompat.Builder(ctx, Notifier.CH_STATUS).setSmallIcon(com.yatesv.contacthub.R.drawable.ic_tile)
                     .setContentTitle("Orbit update ready").setContentText("Tap to install").setContentIntent(pi).setAutoCancel(true).build()
-                runCatching { androidx.core.app.NotificationManagerCompat.from(ctx).notify(7400, n) }
+                runCatching { androidx.core.app.NotificationManagerCompat.from(ctx).notify(7600, n) }
             }
             PackageInstaller.STATUS_SUCCESS -> HubLog.d("Update", "installed")
             else -> {

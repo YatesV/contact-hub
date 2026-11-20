@@ -57,6 +57,11 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Gif
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -144,6 +149,9 @@ object ChatData0 {
                 status = if (l.source == "failed") 2 else 0)
         }
         merged.sortBy { it.date }
+        // Messages you removed from Orbit
+        val removed = Hub.orbit.hiddenMsgs(key)
+        if (removed.isNotEmpty()) merged.removeAll { it.key in removed }
 
         val convert = Hub.settings.value.convertReactions
         val shown = ArrayList<Msg>()
@@ -191,6 +199,17 @@ fun ChatScreen(key: String) {
     var text by remember { mutableStateOf(Nav.drafts.remove(key).orEmpty()) }
     var menu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Msg?>(null) }
+    /** Replying to this message (quote goes on top of what you send) */
+    var replyTo by remember(key) { mutableStateOf<Msg?>(null) }
+    /** Messages ticked in select mode */
+    var picked by remember(key) { mutableStateOf(setOf<String>()) }
+    var forwardThese by remember { mutableStateOf<List<Msg>?>(null) }
+    var deleteThese by remember { mutableStateOf<List<Msg>?>(null) }
+    var showGifs by remember { mutableStateOf(false) }
+    var editPhoto by remember { mutableStateOf<Uri?>(null) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    /** A new message came in while you were scrolled up */
+    var newBelow by remember(key) { mutableStateOf(false) }
     var showTimes by remember { mutableStateOf(setOf<String>()) }
     var scheduling by remember { mutableStateOf(false) }
     var groupDialog by remember { mutableStateOf(false) }
@@ -222,9 +241,10 @@ fun ChatScreen(key: String) {
     val name = InboxData.nameFor(key, addresses, meta, group?.name)
     val chatType = Hub.rcsState(key)
 
-    DisposableEffect(key) {
+    // "This chat is on screen" only while Orbit is actually in front (Home/screen off clears it, so you still get notified)
+    androidx.lifecycle.compose.LifecycleResumeEffect(key) {
         Hub.openConv = key
-        onDispose { if (Hub.openConv == key) Hub.openConv = "" }
+        onPauseOrDispose { if (Hub.openConv == key) Hub.openConv = "" }
     }
     LaunchedEffect(key, version, limit) {
         meta = dao.meta(key) ?: ConvMeta(key)
@@ -245,11 +265,39 @@ fun ChatScreen(key: String) {
         Sender.retryPendingFor(ctx, key)
     }
 
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
-        if (uris.isNotEmpty()) scope.launch {
-            val r = Sender.sendMedia(ctx, key, uris, text)
-            if (r.ok) text = "" else snack.showSnackbar(r.error)
+    /** Sends files with whatever is typed as the caption, then scrolls to the bottom. */
+    fun sendFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val caption = replyTo?.takeIf { text.isNotBlank() }?.let { com.yatesv.contacthub.data.Quote.make(it.body, text) } ?: text
+        replyTo = null
+        scope.launch {
+            snack.showSnackbar("Sending…", duration = androidx.compose.material3.SnackbarDuration.Short)
         }
+        scope.launch {
+            val r = Sender.sendMedia(ctx, key, uris, caption)
+            if (r.ok) { text = ""; runCatching { listState.animateScrollToItem(0) } } else snack.showSnackbar(r.error)
+        }
+    }
+    fun sendFile(f: java.io.File) = sendFiles(listOf(OutFiles.uri(ctx, f)))
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        // One photo: open the editor first (draw/crop). Several: send them as they are.
+        if (uris.size == 1 && ctx.contentResolver.getType(uris[0])?.startsWith("image") == true && ctx.contentResolver.getType(uris[0])?.contains("gif") != true) editPhoto = uris[0]
+        else sendFiles(uris)
+    }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (ok) cameraUri?.let { editPhoto = it } }
+    val takeVideo = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok -> if (ok) cameraUri?.let { sendFiles(listOf(it)) } }
+    val pickContact = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri ->
+        if (uri != null) scope.launch { contactCard(ctx, uri)?.let { (f, _) -> sendFile(f) } ?: snack.showSnackbar("Couldn't read that contact") }
+    }
+    fun sendLocation() = scope.launch {
+        snack.showSnackbar("Getting your location…", duration = androidx.compose.material3.SnackbarDuration.Short)
+        val l = currentLocation(ctx)
+        if (l == null) snack.showSnackbar("Couldn't get your location. Is location on?")
+        else { com.yatesv.contacthub.engine.SendQueue.add(ctx, key, locationText(l)); runCatching { listState.animateScrollToItem(0) } }
+    }
+    val locPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res -> if (res.values.any { it }) sendLocation() }
+    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) scope.launch { snack.showSnackbar("Now hold the mic to record") }
     }
     val pickWallpaper = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
@@ -278,9 +326,13 @@ fun ChatScreen(key: String) {
     }
 
     fun send() {
-        val body = text.trim()
-        if (body.isEmpty()) return
+        val typed = text.trim()
+        if (typed.isEmpty()) return
+        val body = replyTo?.let { com.yatesv.contacthub.data.Quote.make(it.body, typed) } ?: typed
+        replyTo = null
         text = ""
+        // Slide down so what you sent isn't hidden under the keyboard
+        scope.launch { kotlinx.coroutines.delay(60); runCatching { listState.animateScrollToItem(0) } }
         Haptics.tap(view)
         SendSound.play()
         Effects.trigger(body)
@@ -374,6 +426,26 @@ fun ChatScreen(key: String) {
                     if (idx >= 0) scope.launch { listState.animateScrollToItem(idx); showTimes = showTimes + msgKey }
                     else scope.launch { limit = maxOf(limit, 2000); snack.showSnackbar("That message is further back. Loading older messages…") }
                 }
+                // New message at the bottom: scroll to it (unless you've scrolled up to read; then show a button)
+                val newestKey = msgs.lastOrNull()?.key
+                val newestMine = msgs.lastOrNull()?.outgoing == true
+                LaunchedEffect(newestKey) {
+                    if (newestKey == null) return@LaunchedEffect
+                    if (newestMine || listState.firstVisibleItemIndex <= 3) { runCatching { listState.animateScrollToItem(0) }; newBelow = false } else newBelow = true
+                }
+                LaunchedEffect(listState.firstVisibleItemIndex) { if (listState.firstVisibleItemIndex == 0) newBelow = false }
+                if (picked.isNotEmpty()) SelectionBar(picked.size,
+                    onClose = { picked = emptySet() },
+                    onCopy = { copy(ctx, msgs.filter { it.key in picked }.joinToString("\n") { it.body }); picked = emptySet(); scope.launch { snack.showSnackbar("Copied") } },
+                    onForward = { forwardThese = msgs.filter { it.key in picked }; picked = emptySet() },
+                    onStar = { val sel = msgs.filter { it.key in picked }; picked = emptySet(); scope.launch { sel.forEach { dao.star(Starred(it.key, key, it.body, it.date)) }; snack.showSnackbar("Starred ${sel.size}") } },
+                    onDelete = { deleteThese = msgs.filter { it.key in picked } },
+                )
+                ForwardBar(key) { f ->
+                    if (f.media.isNotEmpty()) scope.launch { val r = Sender.sendMedia(ctx, key, f.media, f.text); if (!r.ok) snack.showSnackbar(r.error) }
+                    else com.yatesv.contacthub.engine.SendQueue.add(ctx, key, f.text)
+                    scope.launch { kotlinx.coroutines.delay(60); runCatching { listState.animateScrollToItem(0) } }
+                }
                 PinnedBar(key) { p -> scrollTo(p.msgKey) }
                 if (searching) ChatSearch(msgs, onOpen = { m -> searching = false; scrollTo(m.key) }, onClose = { searching = false })
                 LaunchedEffect(data) {
@@ -382,13 +454,43 @@ fun ChatScreen(key: String) {
                 val starredKeys = starred.map { it.msgKey }.toSet()
                 // Drag left anywhere in the chat to peek at every message's time; it springs back when you let go
                 val reveal = remember { androidx.compose.animation.core.Animatable(0f) }
+                val swipe = remember { androidx.compose.animation.core.Animatable(0f) }
+                var swipeKey by remember { mutableStateOf<String?>(null) }
+                var swipeBuzzed by remember { mutableStateOf(false) }
+                LaunchedEffect(swipe.value == 0f) { if (swipe.value == 0f) swipeBuzzed = false }
                 val maxReveal = with(androidx.compose.ui.platform.LocalDensity.current) { 64.dp.toPx() }
                 val lastOutKey = msgs.lastOrNull { it.outgoing }?.key
+                val replyMax = maxReveal * 1.3f
+                val liveMsgs by androidx.compose.runtime.rememberUpdatedState(msgs)
                 LazyColumn(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
+                    // Drag left: peek at times. Drag a message right: reply to it.
+                    var target: String? = null
+                    var total = 0f
                     detectHorizontalDragGestures(
-                        onDragEnd = { scope.launch { reveal.animateTo(0f, Motion.spec()) } },
-                        onDragCancel = { scope.launch { reveal.animateTo(0f, Motion.spec()) } },
-                    ) { change, dx -> change.consume(); scope.launch { reveal.snapTo((reveal.value - dx * 0.6f).coerceIn(0f, maxReveal)) } }
+                        onDragStart = { o ->
+                            total = 0f
+                            val info = listState.layoutInfo
+                            val h = info.viewportSize.height
+                            target = info.visibleItemsInfo.firstOrNull { it ->
+                                val top = h - it.offset - it.size; o.y >= top && o.y < top + it.size
+                            }?.key as? String
+                        },
+                        onDragEnd = {
+                            val t = target
+                            if (t != null && swipe.value > replyMax * 0.6f) liveMsgs.firstOrNull { it.key == t }?.let { replyTo = it; Haptics.confirm(view); runCatching { focus.requestFocus() } }
+                            scope.launch { reveal.animateTo(0f, Motion.spec()) }
+                            scope.launch { swipe.animateTo(0f, Motion.spec()) }
+                        },
+                        onDragCancel = { scope.launch { reveal.animateTo(0f, Motion.spec()) }; scope.launch { swipe.animateTo(0f, Motion.spec()) } },
+                    ) { change, dx ->
+                        change.consume()
+                        total += dx
+                        if (total > 0 && target != null && picked.isEmpty()) {
+                            swipeKey = target
+                            scope.launch { swipe.snapTo((total * 0.7f).coerceIn(0f, replyMax)) }
+                            if (swipe.value >= replyMax * 0.6f && !swipeBuzzed) { swipeBuzzed = true; Haptics.tap(view) }
+                        } else scope.launch { reveal.snapTo((reveal.value - dx * 0.6f).coerceIn(0f, maxReveal)) }
+                    }
                 }, state = listState, reverseLayout = true, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
                     items(reversed.size, key = { reversed[it].key }) { i ->
@@ -398,13 +500,17 @@ fun ChatScreen(key: String) {
                         val newer = reversed.getOrNull(i - 1)
                         val first = older == null || older.outgoing != m.outgoing || older.sender != m.sender || m.date - older.date > 300_000
                         val last = newer == null || newer.outgoing != m.outgoing || newer.sender != m.sender || newer.date - m.date > 300_000
-                        Column(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null, placementSpec = Motion.spec())) {
+                        Column(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null, placementSpec = Motion.spec())
+                            .background(if (m.key in picked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)) {
                             if (older == null || !sameDay(older.date, m.date)) DateChip(m.date)
                             Box(Modifier.fillMaxWidth()) {
                             if (reveal.value > 1f) Text(java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(m.date)),
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp).graphicsLayer { alpha = reveal.value / maxReveal })
-                            Box(Modifier.graphicsLayer { translationX = -reveal.value }) {
+                            if (swipeKey == m.key && swipe.value > 4f) Icon(Icons.AutoMirrored.Filled.Reply, null,
+                                Modifier.align(Alignment.CenterStart).padding(start = 12.dp).graphicsLayer { alpha = (swipe.value / (replyMax * 0.6f)).coerceIn(0f, 1f) },
+                                tint = MaterialTheme.colorScheme.primary)
+                            Box(Modifier.graphicsLayer { translationX = -reveal.value + if (swipeKey == m.key) swipe.value else 0f }) {
                             EnterAnim(isNew, m.outgoing, fromPending = m.outgoing && m.body.trim() in justSent && !m.key.startsWith("q:"), onShown = {
                                 seen.add(m.key)
                                 if (!m.outgoing) Effects.trigger(m.body)
@@ -416,10 +522,11 @@ fun ChatScreen(key: String) {
                                 memberColor = if (isGroup && !m.outgoing) memberColor(m.sender, extras[Phone.norm(m.sender)]?.groupColor ?: 0) else null,
                                 mention = isGroup && !m.outgoing && settings.myName.isNotBlank() && m.body.contains(settings.myName, true),
                                 onClick = {
-                                    if (m.key.startsWith("q:") && m.status == 2) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
+                                    if (picked.isNotEmpty()) { picked = if (m.key in picked) picked - m.key else picked + m.key }
+                                    else if (m.key.startsWith("q:") && m.status == 2) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
                                     else showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key
                                 },
-                                onLong = { Haptics.long(view); selected = m },
+                                onLong = { Haptics.long(view); if (picked.isNotEmpty()) picked = if (m.key in picked) picked - m.key else picked + m.key else selected = m },
                                 onDouble = { Haptics.confirm(view); reactTo(m, settings.doubleTapEmoji) },
                                 doubleEmoji = settings.doubleTapEmoji,
                                 onBounds = { bounds[m.key] = it },
@@ -459,7 +566,11 @@ fun ChatScreen(key: String) {
                     }
                 }
 
-                if (text.isEmpty()) SmartReplyRow(key, real) { r -> text = r; runCatching { focus.requestFocus() } }
+                if (newBelow) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.FilledTonalButton({ scope.launch { runCatching { listState.animateScrollToItem(0) } }; newBelow = false }) { Text("↓ New message") }
+                }
+                replyTo?.let { r -> ReplyBar(r, if (r.outgoing) "yourself" else if (isGroup) Hub.contacts.cached(r.sender)?.name?.substringBefore(' ') ?: Phone.pretty(r.sender) else name.substringBefore(' ')) { replyTo = null } }
+                if (text.isEmpty() && replyTo == null) SmartReplyRow(key, real) { r -> text = r; runCatching { focus.requestFocus() } }
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f)) {
                     var plus by remember { mutableStateOf(false) }
                     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
@@ -470,6 +581,19 @@ fun ChatScreen(key: String) {
                             DropdownMenu(plus, { plus = false }) {
                                 DropdownMenuItem({ Text("Photos") }, { plus = false; pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                                     leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, null) })
+                                DropdownMenuItem({ Text("Camera") }, { plus = false
+                                    cameraUri = OutFiles.uri(ctx, OutFiles.new(ctx, "cam", "jpg")); runCatching { takePhoto.launch(cameraUri!!) } },
+                                    leadingIcon = { Icon(Icons.Default.PhotoCamera, null) })
+                                DropdownMenuItem({ Text("Record video") }, { plus = false
+                                    cameraUri = OutFiles.uri(ctx, OutFiles.new(ctx, "vid", "mp4")); runCatching { takeVideo.launch(cameraUri!!) } },
+                                    leadingIcon = { Icon(Icons.Default.Videocam, null) })
+                                DropdownMenuItem({ Text("GIF") }, { plus = false; showGifs = true }, leadingIcon = { Icon(Icons.Default.Gif, null) })
+                                DropdownMenuItem({ Text("My location") }, { plus = false
+                                    if (ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                                        ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) sendLocation()
+                                    else locPerm.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)) },
+                                    leadingIcon = { Icon(Icons.Default.Place, null) })
+                                DropdownMenuItem({ Text("Contact") }, { plus = false; runCatching { pickContact.launch(null) } }, leadingIcon = { Icon(Icons.Default.Person, null) })
                                 DropdownMenuItem({ Text("Schedule message") }, { plus = false; if (text.isNotBlank()) scheduling = true else scope.launch { snack.showSnackbar("Type a message first, then schedule it") } },
                                     leadingIcon = { Icon(Icons.Default.Schedule, null) })
                             }
@@ -498,6 +622,9 @@ fun ChatScreen(key: String) {
                                     }
                                 },
                             )
+                            if (text.isBlank()) Box(Modifier.padding(start = 2.dp)) {
+                                VoiceButton(enabled = true, onNeedPermission = { micPerm.launch(android.Manifest.permission.RECORD_AUDIO) }) { f -> sendFile(f) }
+                            }
                             androidx.compose.animation.AnimatedVisibility(text.isNotBlank(),
                                 enter = androidx.compose.animation.scaleIn(Motion.popSpec()) + androidx.compose.animation.fadeIn(),
                                 exit = androidx.compose.animation.scaleOut(Motion.spec()) + androidx.compose.animation.fadeOut()) {
@@ -528,6 +655,10 @@ fun ChatScreen(key: String) {
         }
         val pinned = Hub.orbit.pins(key).any { it.msgKey == m.key }
         val extra = buildList<Pair<String, () -> Unit>> {
+            if (!m.key.startsWith("q:")) add("Reply" to { selected = null; replyTo = m; runCatching { focus.requestFocus() } })
+            add("Forward" to { selected = null; forwardThese = listOf(m) })
+            add("Select" to { selected = null; picked = setOf(m.key) })
+            add("Delete" to { selected = null; deleteThese = listOf(m) })
             if (!m.key.startsWith("q:")) add((if (pinned) "Unpin" else "Pin to top") to {
                 selected = null
                 if (pinned) Hub.orbit.unpin(key, m.key) else Hub.orbit.pin(key, com.yatesv.contacthub.data.PinnedMsg(m.key, m.body, m.date))
@@ -552,6 +683,34 @@ fun ChatScreen(key: String) {
         }
     }
     phoneTap?.let { n -> PhoneActions(n) { phoneTap = null } }
+    forwardThese?.let { list ->
+        ForwardDialog(onDismiss = { forwardThese = null }) { target ->
+            forwardThese = null
+            scope.launch {
+                // Copy attachments into Orbit's own files so the other chat (and Google Messages) can read them
+                val media = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    list.flatMap { it.attachments }.mapNotNull { a -> copyIncoming(ctx, a.uri, a.mime)?.let { OutFiles.uri(ctx, it) } }
+                }
+                Forwarding.pending[target] = Forwarding.Pending(list.joinToString("\n") { com.yatesv.contacthub.data.Quote.split(it.body).second }.trim(), media)
+                if (target == key) Nav.replace(Screen.Chat(target)) else Nav.go(Screen.Chat(target))
+            }
+        }
+    }
+    deleteThese?.let { list ->
+        val inPhone = com.yatesv.contacthub.engine.HubSms.isDefault(ctx)
+        AlertDialog(
+            onDismissRequest = { deleteThese = null },
+            title = { Text(if (list.size == 1) "Delete message?" else "Delete ${list.size} messages?") },
+            text = { Text(if (inPhone) "They'll be deleted from your phone." else "They'll be removed from Orbit. In Google Messages mode, Google Messages keeps its own copy.") },
+            confirmButton = { TextButton({
+                deleteThese = null; picked = emptySet()
+                scope.launch { snack.showSnackbar(MsgActions.delete(ctx, key, list)) }
+            }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton({ deleteThese = null }) { Text("Cancel") } },
+        )
+    }
+    if (showGifs) GifPicker(onDismiss = { showGifs = false }) { f -> showGifs = false; sendFile(f) }
+    editPhoto?.let { u -> PhotoEditor(u, onDismiss = { editPhoto = null }) { f -> editPhoto = null; sendFile(f) } }
     if (catchUp) CatchUpSheet(data?.msgs.orEmpty(), isGroup, name) { catchUp = false }
     if (snoozing) SnoozeDialog(key) { snoozing = false }
     selectText?.let { t -> SelectTextDialog(t) { selectText = null } }
@@ -681,7 +840,10 @@ internal fun Bubble(
                         a.mime.startsWith("audio") -> AudioAttachment(a.uri, fg)
                         a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime)
                         a.mime.startsWith("image") -> AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
-                            .clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) },
+                            .clickable {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                    .onFailure { Hub.banner.value = "No app on this phone opens this picture" }
+                            },
                             contentScale = ContentScale.Crop)
                         // Contact cards, PDFs and other files: a tappable row instead of a broken picture
                         else -> Row(Modifier.clickable {
@@ -693,8 +855,10 @@ internal fun Bubble(
                         }
                     }
                 }
+                val (quoted, shownBody) = remember(m.body) { com.yatesv.contacthub.data.Quote.split(m.body) }
+                if (quoted != null && !emojiOnly) QuoteBlock(quoted, fg)
                 if (m.body.isNotBlank()) {
-                    LinkText(m.body, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
+                    LinkText(shownBody, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
                         fontSize = if (emojiOnly) (16 * style.emojiScale * 1.5f).sp else 16.sp,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), onPhone = onPhone)
                     if (translation != null) Text(translation, color = fg.copy(alpha = 0.85f), fontSize = 14.sp,

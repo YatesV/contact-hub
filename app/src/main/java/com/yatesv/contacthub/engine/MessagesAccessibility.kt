@@ -229,7 +229,11 @@ class MessagesAccessibility : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         })
 
+    /** Orbit was in front when this send started. If not, don't pull it up afterwards. */
+    @Volatile private var returnToOrbit = true
+
     private fun backToHub(pkg: String) {
+        if (!returnToOrbit) { if (root(pkg) != null) performGlobalAction(GLOBAL_ACTION_BACK); return }
         runCatching {
             startActivity(Intent(this, MainActivity::class.java).addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NO_ANIMATION))
@@ -242,7 +246,9 @@ class MessagesAccessibility : AccessibilityService() {
             Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$to")).apply { if (!body.isNullOrEmpty()) putExtra("sms_body", body) }
         } else {
             Intent(if (media.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "image/*"
+                // The real type (voice notes, GIFs, contact cards, videos), so Google Messages attaches it properly
+                val types = media.map { contentResolver.getType(it) ?: "*/*" }.distinct()
+                type = types.singleOrNull() ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
                 putExtra("address", to)
                 if (!body.isNullOrEmpty()) { putExtra("sms_body", body); putExtra(Intent.EXTRA_TEXT, body) }
                 if (media.size == 1) putExtra(Intent.EXTRA_STREAM, media[0])
@@ -263,6 +269,7 @@ class MessagesAccessibility : AccessibilityService() {
     }
 
     private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>, convKey: String, forced: String?): DriveResult {
+        returnToOrbit = AppState.foreground
         val want = norm(body)
         val how = method(forced)
         delay(150)              // let the faded "sending" bubble appear first, so it's in the snapshot

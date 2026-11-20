@@ -60,7 +60,9 @@ data class Settings(
     val lastBackup: Long = 0,
 
     // Motion & feel
-    val motion: String = "ios",             // ios, bouncy, smooth, snappy, custom, off
+    val motion: String = "ios",             // ios, bouncy, smooth, snappy, custom (spring), curve (your own curve), off
+    val curvePoints: String = "0.25,0.1;0.45,0.85;0.7,1.04",  // dots you placed on the curve editor (x,y;x,y)
+    val curveDuration: Int = 420,
     val springDamping: Float = 0.86f,       // used when motion = custom
     val springStiffness: Float = 380f,
     val transition: String = "slide",       // slide, fade, zoom
@@ -94,7 +96,7 @@ data class Settings(
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
         put("l360Enabled", l360Enabled); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
-        put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
+        put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
         put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion); put("designVersion", designVersion)
     }
@@ -127,6 +129,7 @@ data class Settings(
                 onboarded = j.optBoolean("onboarded", false),
                 motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
                 springStiffness = j.optDouble("springStiffness", 380.0).toFloat(), transition = j.optString("transition", d.transition),
+                curvePoints = j.optString("curvePoints", d.curvePoints), curveDuration = j.optInt("curveDuration", d.curveDuration),
                 menuStyle = j.optString("menuStyle", d.menuStyle), haptics = j.optBoolean("haptics", true),
                 screenEffects = j.optBoolean("screenEffects", false), sendSound = j.optBoolean("sendSound", false),
                 animatedReactions = j.optBoolean("animatedReactions", false), driveUri = j.optString("driveUri", ""),

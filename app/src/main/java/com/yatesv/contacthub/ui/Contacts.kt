@@ -125,6 +125,7 @@ fun ContactsScreen() {
             OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp), singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search ${list?.size ?: ""} contacts") })
             LazyColumn(Modifier.fillMaxSize()) {
+                if (q.isBlank()) item { FriendSyncCard() }
                 if (favorites.isNotEmpty() && q.isBlank()) {
                     item { SectionTitle("Favorites") }
                     item {
@@ -213,7 +214,8 @@ fun ContactScreen(number: String) {
                 }) { Icon(Icons.Default.PersonAdd, "Save contact") }
             })
     }) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState())) {
+        val scroll = rememberScrollState()
+        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(scroll)) {
             // Header: soft tinted backdrop from their photo/color, big photo, name, quick actions
             Box(Modifier.fillMaxWidth()) {
                 Box(Modifier.matchParentSize().background(androidx.compose.ui.graphics.Brush.verticalGradient(
@@ -221,7 +223,10 @@ fun ContactScreen(number: String) {
                 if (contact?.photo != null) AsyncImage(contact.photo, null, Modifier.matchParentSize().blur(40.dp).graphicsLayer { alpha = 0.35f },
                     contentScale = ContentScale.Crop)
                 Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Avatar(name, contact?.photo, 112.dp)
+                    // Photo shrinks and fades a little as you scroll down
+                    val shrink = (scroll.value / 600f).coerceIn(0f, 0.35f)
+                    Avatar(name, contact?.photo, 112.dp, sharedKey = Phone.convKey(listOf(number)),
+                        modifier = Modifier.graphicsLayer { scaleX = 1f - shrink; scaleY = 1f - shrink; alpha = 1f - shrink; translationY = scroll.value * 0.3f })
                     Spacer(Modifier.height(12.dp))
                     Text(name, style = MaterialTheme.typography.headlineMedium)
                     Text(Phone.pretty(number), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

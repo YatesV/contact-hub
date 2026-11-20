@@ -424,7 +424,7 @@ private fun PinnedGrid(rows: List<ConvRow>, onOpen: (ConvRow) -> Unit, onLong: (
                 .combinedClickable(onClick = { onOpen(r) }, onLongClick = { onLong(r) }).padding(6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Box {
-                    Avatar(r.name, r.photo, 76.dp, group = r.isGroup && r.photo == null)
+                    Avatar(r.name, r.photo, 76.dp, group = r.isGroup && r.photo == null, sharedKey = r.key)
                     if (r.unread) Box(Modifier.align(Alignment.TopStart).size(16.dp).clip(CircleShape)
                         .background(MaterialTheme.colorScheme.background).padding(3.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                 }
@@ -441,8 +441,10 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
     val style = LocalChatStyle.current
     val vPad = if (style.compact) 8.dp else 11.dp
     val avatar = if (style.compact) 42.dp else 52.dp
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLong).padding(start = 6.dp, end = 16.dp),
+        Modifier.fillMaxWidth().pressScale(press, 0.985f)
+            .combinedClickable(press, androidx.compose.material3.ripple(), onClick = onClick, onLongClick = onLong).padding(start = 6.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Unread dot lives in the left margin, so names stay aligned
@@ -452,7 +454,7 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
             }
         }
         if (style.showAvatars) {
-            Avatar(r.name, r.photo, avatar, group = r.isGroup && r.photo == null)
+            Avatar(r.name, r.photo, avatar, group = r.isGroup && r.photo == null, sharedKey = r.key)
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {

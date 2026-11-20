@@ -47,12 +47,19 @@ fun avatarShape(name: String): Shape = when (name) {
     else -> CircleShape
 }
 
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
-fun Avatar(name: String, photo: String?, size: Dp = 48.dp, group: Boolean = false, modifier: Modifier = Modifier) {
+fun Avatar(name: String, photo: String?, size: Dp = 48.dp, group: Boolean = false, modifier: Modifier = Modifier, sharedKey: String? = null) {
     val shape = avatarShape(Hub.settings.value.avatarShape)
+    val sharedScope = LocalSharedScope.current
+    val screenScope = LocalScreenScope.current
+    val sharedMod = if (sharedKey != null && sharedScope != null && screenScope != null && Motion.enabled()) with(sharedScope) {
+        Modifier.sharedElement(rememberSharedContentState("avatar:$sharedKey"), screenScope,
+            boundsTransform = { _, _ -> Motion.spec() })
+    } else Modifier
     val initials = name.split(' ', ',').filter { it.isNotBlank() && it.first().isLetter() }.take(2).joinToString("") { it.first().uppercase() }
     Box(
-        modifier.size(size).clip(shape).background(memberColor(name)),
+        modifier.then(sharedMod).size(size).clip(shape).background(memberColor(name)),
         contentAlignment = Alignment.Center,
     ) {
         Text(if (group) "👥" else initials.ifEmpty { "#" }, color = Color.White, fontSize = (size.value * 0.38f).sp, fontWeight = FontWeight.SemiBold)

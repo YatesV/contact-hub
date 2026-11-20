@@ -151,8 +151,17 @@ fun SetupWizard(first: Boolean) {
         if (Nav.top == Screen.Setup) Nav.back()
     }
     var life360 by remember { mutableStateOf(false) }
-    BackHandler(index > 0 || life360) { if (life360) life360 = false else prev() }
+    var friends by remember { mutableStateOf<com.yatesv.contacthub.data.Social?>(null) }
+    BackHandler(index > 0 || life360 || friends != null) { if (life360) life360 = false else if (friends != null) friends = null else prev() }
     if (life360) { Life360SignInScreen(onDone = { life360 = false }); return }
+    friends?.let { f ->
+        // Inside the wizard there's no back stack yet, so show sync here and come back after
+        Column(Modifier.fillMaxSize()) {
+            TextButton({ friends = null }, Modifier.statusBarsPadding()) { Text("← Back to setup") }
+            Box(Modifier.weight(1f)) { FriendSyncScreen(f) }
+        }
+        return
+    }
 
     var permsBlocked by remember { mutableStateOf(false) }
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
@@ -219,7 +228,7 @@ fun SetupWizard(first: Boolean) {
                         if (rm.isRoleAvailable(RoleManager.ROLE_DIALER)) Button({ role.launch(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER)) }, Modifier.fillMaxWidth()) { Text("Set as default") }
                         TextButton({ next() }) { Text("Skip") }
                     }
-                    Step.ACCOUNTS -> AccountsStep { life360 = true }
+                    Step.ACCOUNTS -> AccountsStep({ life360 = true }, { friends = it })
                     Step.DONE -> DonePage()
                 }
             }
@@ -307,7 +316,7 @@ private fun RestrictedHelp(ctx: Context) {
 }
 
 @Composable
-private fun AccountsStep(openLife360: () -> Unit) {
+private fun AccountsStep(openLife360: () -> Unit, openFriends: (com.yatesv.contacthub.data.Social) -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val s by Hub.settings.flow.collectAsState()
@@ -327,6 +336,10 @@ private fun AccountsStep(openLife360: () -> Unit) {
         imported >= 0) {
         found?.takeIf { it.isNotEmpty() }?.let { list -> scope.launch { imported = SocialImport.apply(list) } }
     }
+    AccountRow("📸", "Instagram friends", if (FriendStore.syncedAt(ctx, com.yatesv.contacthub.data.Social.INSTAGRAM) > 0) "Synced" else "Sign in to match who you follow with your contacts",
+        FriendStore.syncedAt(ctx, com.yatesv.contacthub.data.Social.INSTAGRAM) > 0) { openFriends(com.yatesv.contacthub.data.Social.INSTAGRAM) }
+    AccountRow("🎵", "TikTok friends", if (FriendStore.syncedAt(ctx, com.yatesv.contacthub.data.Social.TIKTOK) > 0) "Synced" else "Same for TikTok",
+        FriendStore.syncedAt(ctx, com.yatesv.contacthub.data.Social.TIKTOK) > 0) { openFriends(com.yatesv.contacthub.data.Social.TIKTOK) }
     AccountRow("☁️", "Google Drive backup", if (s.driveUri.isNotBlank()) "Connected" else "Pick a spot in Drive once; it backs up there daily", s.driveUri.isNotBlank()) {
         drive.launch("contacthub-backup.json")
     }

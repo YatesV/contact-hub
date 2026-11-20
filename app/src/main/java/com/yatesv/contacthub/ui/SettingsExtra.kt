@@ -46,6 +46,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -81,18 +84,35 @@ fun MotionPage() {
         }
         replay++; Haptics.tap(view)
     }
-    // Graph of the spring + live preview
+    // Graph + live preview. In "My curve" you edit the graph directly.
     HubCard {
-        Text("How it moves", style = MaterialTheme.typography.labelLarge)
-        SpringGraph(Motion.params(s), MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.outlineVariant,
-            Modifier.fillMaxWidth().height(120.dp).padding(vertical = 8.dp).semantics { contentDescription = "Spring curve graph" })
-        Text("Time →   (the line is where it ends up; bumps above it are bounce)", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(if (s.motion == "curve") "Your curve" else "How it moves", style = MaterialTheme.typography.labelLarge)
+        if (s.motion == "curve") {
+            CurveEditor(s.curvePoints, Modifier.fillMaxWidth().height(220.dp).padding(vertical = 8.dp)) { pts ->
+                upd { it.copy(curvePoints = pts) }; replay++
+            }
+            Text("Tap to add a dot · drag to bend · double-tap a dot to remove it. Dots above the dashed line make it overshoot.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton({ upd { it.copy(curvePoints = Settings().curvePoints) }; replay++ }) { Text("Reset curve") }
+            }
+        } else {
+            SpringGraph(Motion.params(s), MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.outlineVariant,
+                Modifier.fillMaxWidth().height(120.dp).padding(vertical = 8.dp).semantics { contentDescription = "Spring curve graph" })
+            Text("Time →   (the line is where it ends up; bumps above it are bounce). Pick \"My curve\" to draw your own.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Spacer(Modifier.height(10.dp))
         MotionPreview(s, replay)
         TextButton({ replay++; Haptics.tap(view) }) { Text("Replay") }
     }
-    SectionTitle("Fine-tune (Custom)")
+    if (s.motion == "curve") {
+        SectionTitle("Duration")
+        SliderRow("How long animations take", s.curveDuration.toFloat(), 150f..1200f, "${s.curveDuration} ms") { v ->
+            upd { it.copy(curveDuration = v.toInt()) }; replay++
+        }
+    }
+    SectionTitle("Fine-tune (Spring)")
     SliderRow("Bounciness", 1.2f - s.springDamping, 0.05f..0.85f, "%.0f%%".format((1.2f - s.springDamping) / 0.85f * 100)) { v ->
         upd { it.copy(motion = "custom", springDamping = 1.2f - v) }; replay++
     }
@@ -126,6 +146,81 @@ private fun MotionPreview(s: Settings, replay: Int) {
         Text("Sliding in", color = st.sentText, modifier = Modifier.offset(x = travel * x.value).align(Alignment.TopStart)
             .clip(st.bubble(true, true, true)).background(st.sent).padding(horizontal = 14.dp, vertical = 8.dp))
         Text("❤️", fontSize = 26.sp, modifier = Modifier.align(Alignment.BottomEnd).graphicsLayer { scaleX = pop.value; scaleY = pop.value })
+    }
+}
+
+/**
+ * Curve editor: time goes left to right, progress bottom to top. Start and end dots are fixed;
+ * the dots in between are yours.
+ */
+@Composable
+fun CurveEditor(points: String, modifier: Modifier, onChange: (String) -> Unit) {
+    val view = LocalView.current
+    val accent = MaterialTheme.colorScheme.primary
+    val grid = MaterialTheme.colorScheme.outlineVariant
+    val dotFill = MaterialTheme.colorScheme.background
+    var pts by remember(points) { mutableStateOf(CurveEasing.parse(points).pts.drop(1).dropLast(1)) }
+    var dragging by remember { mutableIntStateOf(-1) }
+    val yMin = -0.3f; val yMax = 1.35f
+    fun commit() = onChange(CurveEasing(pts).serialize())
+
+    androidx.compose.foundation.Canvas(modifier
+        .clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f))
+        .semantics { contentDescription = "Animation curve editor" }
+        .pointerInput(Unit) {
+            val pad = 24.dp.toPx()
+            fun toVal(o: androidx.compose.ui.geometry.Offset) =
+                ((o.x - pad) / (size.width - 2 * pad)).coerceIn(0.02f, 0.98f) to (yMax - (o.y - pad) / (size.height - 2 * pad) * (yMax - yMin)).coerceIn(yMin, yMax)
+            fun toPx(p: Pair<Float, Float>) = androidx.compose.ui.geometry.Offset(pad + p.first * (size.width - 2 * pad), pad + (yMax - p.second) / (yMax - yMin) * (size.height - 2 * pad))
+            fun near(o: androidx.compose.ui.geometry.Offset) = pts.indices.minByOrNull { (toPx(pts[it]) - o).getDistance() }
+                ?.takeIf { (toPx(pts[it]) - o).getDistance() < 28.dp.toPx() } ?: -1
+            detectTapGestures(
+                onDoubleTap = { o -> val i = near(o); if (i >= 0) { pts = pts.filterIndexed { k, _ -> k != i }; Haptics.reject(view); commit() } },
+                onTap = { o -> if (near(o) < 0 && pts.size < 8) { pts = (pts + toVal(o)).sortedBy { it.first }; Haptics.tap(view); commit() } },
+            )
+        }
+        .pointerInput(Unit) {
+            val pad = 24.dp.toPx()
+            fun toVal(o: androidx.compose.ui.geometry.Offset) =
+                ((o.x - pad) / (size.width - 2 * pad)).coerceIn(0.02f, 0.98f) to (yMax - (o.y - pad) / (size.height - 2 * pad) * (yMax - yMin)).coerceIn(yMin, yMax)
+            fun toPx(p: Pair<Float, Float>) = androidx.compose.ui.geometry.Offset(pad + p.first * (size.width - 2 * pad), pad + (yMax - p.second) / (yMax - yMin) * (size.height - 2 * pad))
+            detectDragGestures(
+                onDragStart = { o -> dragging = pts.indices.minByOrNull { (toPx(pts[it]) - o).getDistance() }
+                    ?.takeIf { (toPx(pts[it]) - o).getDistance() < 32.dp.toPx() } ?: -1
+                    if (dragging >= 0) Haptics.tap(view) },
+                onDragEnd = { if (dragging >= 0) commit(); dragging = -1 },
+                onDragCancel = { dragging = -1 },
+            ) { change, _ ->
+                if (dragging < 0) return@detectDragGestures
+                change.consume()
+                val v = toVal(change.position)
+                // Keep dots in time order: a dot can't pass its neighbours
+                val lo = pts.getOrNull(dragging - 1)?.first?.plus(0.02f) ?: 0.02f
+                val hi = pts.getOrNull(dragging + 1)?.first?.minus(0.02f) ?: 0.98f
+                pts = pts.toMutableList().also { it[dragging] = v.first.coerceIn(lo, hi) to v.second }
+            }
+        }) {
+        val pad = 24.dp.toPx()
+        val w = size.width - 2 * pad; val h = size.height - 2 * pad
+        fun px(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(pad + x * w, pad + (yMax - y) / (yMax - yMin) * h)
+        // grid
+        for (i in 0..4) { val x = pad + w * i / 4; drawLine(grid, androidx.compose.ui.geometry.Offset(x, pad), androidx.compose.ui.geometry.Offset(x, pad + h), 1f) }
+        drawLine(grid, px(0f, 0f), px(1f, 0f), 2f)
+        drawLine(grid, px(0f, 1f), px(1f, 1f), 2f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
+        // curve
+        val easing = CurveEasing(pts)
+        val path = androidx.compose.ui.graphics.Path()
+        for (i in 0..120) { val x = i / 120f; val p = px(x, easing.transform(x)); if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y) }
+        drawPath(path, accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        // fixed ends
+        listOf(0f to 0f, 1f to 1f).forEach { (x, y) -> drawCircle(grid, 9f, px(x, y)) }
+        // your dots
+        pts.forEachIndexed { i, (x, y) ->
+            val c = px(x, y)
+            drawCircle(accent.copy(alpha = 0.18f), if (i == dragging) 36f else 26f, c)
+            drawCircle(dotFill, 14f, c)
+            drawCircle(accent, 14f, c, style = androidx.compose.ui.graphics.drawscope.Stroke(5f))
+        }
     }
 }
 

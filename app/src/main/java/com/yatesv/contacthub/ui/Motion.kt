@@ -52,25 +52,34 @@ object Motion {
         "smooth" to SpringParams(1.0f, 180f),
         "snappy" to SpringParams(0.92f, 1100f),
     )
-    val labels = mapOf("ios" to "iOS", "bouncy" to "Bouncy", "smooth" to "Smooth", "snappy" to "Snappy", "custom" to "Custom", "off" to "Off")
+    val labels = mapOf("ios" to "iOS", "bouncy" to "Bouncy", "smooth" to "Smooth", "snappy" to "Snappy", "custom" to "Spring", "curve" to "My curve", "off" to "Off")
 
     /** Android's "Remove animations" accessibility setting turns motion off everywhere. */
     private fun systemMotionOff() = runCatching {
         android.provider.Settings.Global.getFloat(Hub.app.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
     }.getOrDefault(false)
 
+    fun enabled(s: Settings = Hub.settings.value) = !systemMotionOff() && s.motion != "off"
+
+    /** Spring settings, or null when motion is off or you're using your own curve. */
     fun params(s: Settings = Hub.settings.value): SpringParams? = if (systemMotionOff()) null else when (s.motion) {
-        "off" -> null
+        "off", "curve" -> null
         "custom" -> SpringParams(s.springDamping, s.springStiffness)
         else -> presets[s.motion] ?: presets.getValue("ios")
     }
 
-    fun <T> spec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> =
-        params(s)?.let { spring(it.damping, it.stiffness) } ?: snap()
+    fun <T> spec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> = when {
+        !enabled(s) -> snap()
+        s.motion == "curve" -> androidx.compose.animation.core.tween(s.curveDuration, easing = CurveEasing.parse(s.curvePoints))
+        else -> params(s)?.let { spring(it.damping, it.stiffness) } ?: snap()
+    }
 
     /** Slightly bouncier version for small pops (reactions, bubbles). */
-    fun <T> popSpec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> =
-        params(s)?.let { spring((it.damping * 0.7f).coerceAtLeast(0.35f), it.stiffness) } ?: snap()
+    fun <T> popSpec(s: Settings = Hub.settings.value): FiniteAnimationSpec<T> = when {
+        !enabled(s) -> snap()
+        s.motion == "curve" -> androidx.compose.animation.core.tween((s.curveDuration * 0.8f).toInt(), easing = CurveEasing.parse(s.curvePoints))
+        else -> params(s)?.let { spring((it.damping * 0.7f).coerceAtLeast(0.35f), it.stiffness) } ?: snap()
+    }
 
     /** Position over time (0..1 target) for the settings graph. Damped spring, starting at 0. */
     fun curve(p: SpringParams, seconds: Float = 1.2f, steps: Int = 120): List<Float> {
@@ -88,6 +97,43 @@ object Motion {
             }
             y
         }
+    }
+}
+
+/**
+ * Easing made from dots you place (like One UI's animation editor). Time runs left to right,
+ * height is how far along the animation is; dots above the top line make it overshoot.
+ * Smooth curve through the dots (cardinal spline), always starting at (0,0) and ending at (1,1).
+ */
+class CurveEasing(points: List<Pair<Float, Float>>) : androidx.compose.animation.core.Easing {
+    val pts: List<Pair<Float, Float>> = (listOf(0f to 0f) + points.filter { it.first > 0.01f && it.first < 0.99f } + listOf(1f to 1f))
+        .sortedBy { it.first }.distinctBy { (it.first * 1000).toInt() }
+
+    private fun tangent(i: Int): Float {
+        val p0 = pts[maxOf(i - 1, 0)]; val p1 = pts[minOf(i + 1, pts.lastIndex)]
+        val dx = p1.first - p0.first
+        return if (dx <= 0f) 0f else (p1.second - p0.second) / dx
+    }
+
+    override fun transform(fraction: Float): Float {
+        val x = fraction.coerceIn(0f, 1f)
+        val i = (pts.indexOfLast { it.first <= x }).coerceIn(0, pts.lastIndex - 1)
+        val (x0, y0) = pts[i]; val (x1, y1) = pts[i + 1]
+        val h = (x1 - x0).coerceAtLeast(1e-4f)
+        val t = ((x - x0) / h).coerceIn(0f, 1f)
+        val m0 = tangent(i) * h; val m1 = tangent(i + 1) * h
+        val t2 = t * t; val t3 = t2 * t
+        return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * m1
+    }
+
+    fun serialize() = pts.drop(1).dropLast(1).joinToString(";") { "%.3f,%.3f".format(java.util.Locale.US, it.first, it.second) }
+
+    companion object {
+        fun parse(s: String) = CurveEasing(s.split(';').mapNotNull { p ->
+            val (a, b) = p.split(',').takeIf { it.size == 2 } ?: return@mapNotNull null
+            val x = a.toFloatOrNull() ?: return@mapNotNull null; val y = b.toFloatOrNull() ?: return@mapNotNull null
+            x to y
+        })
     }
 }
 

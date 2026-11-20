@@ -195,3 +195,45 @@ object Geo {
         }
     }
 }
+
+/** Matches people you follow on a social app to your contacts by name. */
+object FriendMatch {
+    data class Friend(val username: String, val fullName: String)
+    data class Match(val phoneKey: String, val contactName: String, val friend: Friend, val score: Int)
+
+    private val emoji = Regex("[^\\p{L}\\p{N} ]")
+    fun norm(s: String) = emoji.replace(java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}"), ""), " ")
+        .lowercase().split(' ').filter { it.isNotBlank() }
+
+    /**
+     * Score: 3 = same full name, 2 = first and last name both match (or username is first+last),
+     * 1 = only the first name matches and it's unique among your contacts (shown, but not pre-checked).
+     */
+    fun match(friends: List<Friend>, contacts: List<Pair<String, String>>): List<Match> {
+        val firstCounts = contacts.groupingBy { norm(it.first).firstOrNull().orEmpty() }.eachCount()
+        val out = ArrayList<Match>()
+        for ((name, key) in contacts) {
+            val c = norm(name)
+            if (c.isEmpty()) continue
+            var best: Match? = null
+            for (f in friends) {
+                val n = norm(f.fullName)
+                val user = f.username.lowercase().filter { it.isLetterOrDigit() }
+                val score = when {
+                    n.isNotEmpty() && n == c -> 3
+                    c.size >= 2 && n.size >= 2 && n.first() == c.first() && n.last() == c.last() -> 2
+                    c.size >= 2 && user.contains(c.first() + c.last()) -> 2
+                    c.size >= 2 && n.size == 1 && user.contains(c.first()) && user.contains(c.last()) -> 2
+                    n.isNotEmpty() && n.first() == c.first() && c.first().length >= 3 && firstCounts[c.first()] == 1 &&
+                        (c.size == 1 || n.size == 1) -> 1
+                    else -> 0
+                }
+                if (score > 0 && (best == null || score > best.score)) best = Match(key, name, f, score)
+            }
+            best?.let { out += it }
+        }
+        // One friend shouldn't be linked to two contacts: keep the best
+        return out.groupBy { it.friend.username }.values.map { list -> list.maxBy { it.score } }
+            .sortedWith(compareByDescending<Match> { it.score }.thenBy { it.contactName })
+    }
+}

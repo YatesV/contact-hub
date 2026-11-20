@@ -66,6 +66,7 @@ sealed class Screen {
     data class ShareSocial(val social: Social, val value: String) : Screen()
     data class SocialSearch(val number: String, val social: Social) : Screen()
     data object Life360SignIn : Screen()
+    data class FriendSync(val social: Social) : Screen()
     data object Setup : Screen()
 }
 
@@ -183,17 +184,26 @@ private fun Uri.getQueryParameterSafe(k: String): String? =
 
 const val SETUP_VERSION = 2
 
+/** Lets photos fly between screens (shared element transitions). */
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+val LocalSharedScope = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.animation.SharedTransitionScope?> { null }
+val LocalScreenScope = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.animation.AnimatedVisibilityScope?> { null }
+
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppRoot() {
     BackHandler(Nav.stack.size > 1) { Nav.back() }
     val s by Hub.settings.flow.collectAsState()
     val effect by Effects.current.collectAsState()
+    androidx.compose.animation.SharedTransitionLayout(Modifier.fillMaxSize()) {
+    val shared = this
     AnimatedContent(
         targetState = Nav.top,
         transitionSpec = { screenTransition(s, Nav.forward) },
         label = "screens",
         modifier = Modifier.fillMaxSize(),
     ) { top ->
+        androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides shared, LocalScreenScope provides this) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (top) {
             Screen.Tabs -> Tabs()
@@ -209,21 +219,27 @@ fun AppRoot() {
             is Screen.ShareSocial -> ShareSocialScreen(top.social, top.value)
             is Screen.SocialSearch -> SocialSearchScreen(top.number, top.social)
             Screen.Life360SignIn -> Life360SignInScreen()
+            is Screen.FriendSync -> FriendSyncScreen(top.social)
             Screen.Setup -> SetupWizard(first = false)
         }
         }
+        }
+    }
     }
     effect?.let { e -> EffectOverlay(e) { Effects.current.value = null } }
 }
 
 /** iOS-style push: new screen slides in from the right, old one slides a bit left and dims. */
 private fun AnimatedContentTransitionScope<Screen>.screenTransition(s: com.yatesv.contacthub.data.Settings, forward: Boolean): ContentTransform {
-    val p = Motion.params(s) ?: return fadeIn(snap()) togetherWith fadeOut(snap())
-    val offset = spring<IntOffset>(p.damping.coerceAtLeast(0.9f), p.stiffness)
-    val fade = spring<Float>(1f, p.stiffness)
+    if (!Motion.enabled(s)) return fadeIn(snap()) togetherWith fadeOut(snap())
+    val p = Motion.params(s)
+    // Pages shouldn't wobble sideways, so slides use a calmer version of the spring
+    val offset: androidx.compose.animation.core.FiniteAnimationSpec<IntOffset> = p?.let { spring(it.damping.coerceAtLeast(0.9f), it.stiffness) } ?: Motion.spec(s)
+    val fade: androidx.compose.animation.core.FiniteAnimationSpec<Float> = p?.let { spring(1f, it.stiffness) } ?: Motion.spec(s)
+    val scale: androidx.compose.animation.core.FiniteAnimationSpec<Float> = Motion.spec(s)
     return when (s.transition) {
         "fade" -> fadeIn(fade) togetherWith fadeOut(fade)
-        "zoom" -> (scaleIn(spring(p.damping, p.stiffness), 0.92f) + fadeIn(fade)) togetherWith (scaleOut(spring(p.damping, p.stiffness), 1.05f) + fadeOut(fade))
+        "zoom" -> (scaleIn(scale, 0.92f) + fadeIn(fade)) togetherWith (scaleOut(scale, 1.05f) + fadeOut(fade))
         else -> if (forward) {
             slideInHorizontally(offset) { it } togetherWith (slideOutHorizontally(offset) { -it / 3 } + fadeOut(fade, 0.6f))
         } else {
@@ -235,6 +251,7 @@ private fun AnimatedContentTransitionScope<Screen>.screenTransition(s: com.yates
 @Composable
 private fun Tabs() {
     val s by Hub.settings.flow.collectAsState()
+    val view = androidx.compose.ui.platform.LocalView.current
     Scaffold(
         bottomBar = {
             Column {
@@ -247,7 +264,7 @@ private fun Tabs() {
                     Triple("settings", "Settings", Icons.Default.Settings),
                 ).forEach { (id, label, icon) ->
                     NavigationBarItem(
-                        selected = Nav.tab == id, onClick = { Nav.tab = id },
+                        selected = Nav.tab == id, onClick = { if (Nav.tab != id) Haptics.tap(view); Nav.tab = id },
                         icon = { Icon(icon, label) },
                         label = if (s.navLabels) ({ Text(label, style = MaterialTheme.typography.labelSmall) }) else null,
                         colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
@@ -261,12 +278,21 @@ private fun Tabs() {
         },
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
     ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad)) {
-            when (Nav.tab) {
-                "contacts" -> ContactsScreen()
-                "phone" -> DialerScreen()
-                "settings" -> SettingsHome()
-                else -> InboxScreen()
+        val order = listOf("messages", "contacts", "phone", "settings")
+        AnimatedContent(Nav.tab, Modifier.fillMaxSize().padding(pad), label = "tabs", transitionSpec = {
+            // Slide a little in the direction of the tab you picked, with a cross-fade
+            val dir = if (order.indexOf(targetState) > order.indexOf(initialState)) 1 else -1
+            if (!Motion.enabled()) fadeIn(snap()) togetherWith fadeOut(snap())
+            else (slideInHorizontally(Motion.spec()) { it / 10 * dir } + fadeIn(Motion.spec()) + scaleIn(Motion.spec(), 0.98f)) togetherWith
+                (slideOutHorizontally(Motion.spec()) { -it / 10 * dir } + fadeOut(Motion.spec()))
+        }) { tab ->
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                when (tab) {
+                    "contacts" -> ContactsScreen()
+                    "phone" -> DialerScreen()
+                    "settings" -> SettingsHome()
+                    else -> InboxScreen()
+                }
             }
         }
     }

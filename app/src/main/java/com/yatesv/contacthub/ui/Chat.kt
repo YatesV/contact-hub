@@ -280,7 +280,7 @@ fun ChatScreen(key: String) {
                         if (isGroup) groupDialog = true else addresses.firstOrNull()?.let { Nav.go(Screen.Contact(it)) }
                     }.padding(horizontal = 10.dp, vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Avatar(name, group?.photoUri?.ifBlank { null } ?: if (!isGroup) Hub.contacts.cached(addresses.firstOrNull().orEmpty())?.photo else null,
-                            40.dp, group = isGroup && group?.photoUri.isNullOrBlank())
+                            40.dp, group = isGroup && group?.photoUri.isNullOrBlank(), sharedKey = key)
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                             Text(name, maxLines = 1, style = MaterialTheme.typography.labelMedium, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(max = 200.dp))
@@ -562,7 +562,13 @@ private fun Bubble(
                     .onGloballyPositioned { onBounds(it.boundsInRoot()) }
                     .graphicsLayer { alpha = if (m.status == 1 && m.key.startsWith("p:")) 0.6f else 1f }
                     .clip(style.bubble(m.outgoing, first, last))
-                    .background(if (emojiOnly) Color.Transparent else bg)
+                    .then(when {
+                        emojiOnly -> Modifier
+                        // A touch of depth: your bubbles get a soft top-to-bottom gradient
+                        m.outgoing && colorOverride == 0 -> Modifier.background(androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(androidx.compose.ui.graphics.lerp(bg, Color.White, 0.14f), bg)))
+                        else -> Modifier.background(bg)
+                    })
                     .then(if (mention) Modifier.border(2.dp, MaterialTheme.colorScheme.tertiary, style.bubble(m.outgoing, first, last)) else Modifier)
                     .combinedClickable(onClick = onClick, onLongClick = onLong)
                     .padding(if (emojiOnly) 2.dp else 0.dp),

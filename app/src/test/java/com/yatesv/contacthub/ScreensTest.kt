@@ -96,6 +96,13 @@ class ScreensTest {
         pages.forEach { p -> rule.runOnIdle { page.value = p }; rule.waitForIdle() }
     }
 
+    @Test fun curveEditor() {
+        Hub.settings.update { it.copy(motion = "curve") }
+        show { SettingsPage("motion") }
+        rule.onNodeWithText("Your curve").assertExists()
+        Hub.settings.update { it.copy(motion = "ios") }
+    }
+
     @Test fun setupWizardWalkthrough() {
         show { SetupWizard(first = true) }
         rule.onNodeWithText("Welcome to Contact Hub").assertExists()

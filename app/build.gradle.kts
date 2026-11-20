@@ -32,6 +32,14 @@ android {
         debug {
             signingConfig = signingConfigs.getByName("debug")
         }
+        // The build you install: optimized (R8) and not debuggable, so animations run much smoother.
+        // Signed with the same key as before, so it installs over the old version and keeps your data.
+        release {
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
     }
 
     compileOptions {
@@ -71,6 +79,7 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

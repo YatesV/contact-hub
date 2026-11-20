@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Button
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -206,6 +207,20 @@ fun SocialSearchScreen(number: String, start: Social) {
                 Text(if (onSite) "Searching on ${social.label}" else "Searching Google", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton({ onSite = !onSite; load() }) { Text(if (onSite) "Use Google instead" else "Search on ${social.label}") }
+            }
+            // Friends you've synced that look like this person
+            val suggestions = remember(social) { syncedSuggestions(Hub.app, social, name) }
+            if (suggestions.isNotEmpty()) Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                Text("From your ${social.label} friends", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                suggestions.forEach { f ->
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { found = f.username }.padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        SocialIcon(social, 28.dp); Spacer(Modifier.width(10.dp))
+                        Column { Text("@${f.username}", style = MaterialTheme.typography.titleSmall); if (f.fullName.isNotBlank()) Text(f.fullName, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            } else if (social != Social.SNAPCHAT) TextButton({ Nav.go(Screen.FriendSync(social)) }, Modifier.padding(horizontal = 4.dp)) {
+                Text("Sign in to ${social.label} to sync all your friends at once")
             }
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             Box(Modifier.weight(1f)) {

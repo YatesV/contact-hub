@@ -489,7 +489,7 @@ class MockService : Service() {
 class MockTile : TileService() {
     override fun onStartListening() = update()
 
-    override fun onClick() {
+    override fun onClick() { com.yatesv.contacthub.data.safely("MockService") {
         val st = MockStore.state.value
         when {
             st.active -> MockStore.stop(this)
@@ -498,6 +498,7 @@ class MockTile : TileService() {
             else -> openApp()
         }
         update()
+    }
     }
 
     @Suppress("DEPRECATION")
@@ -545,7 +546,7 @@ object MockAlarms {
 }
 
 class MockAlarmReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("MockService") {
         MockStore.load()
         val id = intent.getIntExtra("id", -1)
         val s = MockStore.schedules.value.firstOrNull { it.id == id } ?: return
@@ -560,5 +561,6 @@ class MockAlarmReceiver : BroadcastReceiver() {
                     .setContentIntent(MockService.openIntent(ctx)).setAutoCancel(true).build())
             }
         }
+    }
     }
 }

@@ -203,7 +203,7 @@ object Arrivals {
 }
 
 class ArrivalReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("OrbitWork") {
         if (!intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, false)) return
         val id = intent.getStringExtra("id") ?: return
         val r = Hub.orbit.arrivals().firstOrNull { it.id == id } ?: return
@@ -220,6 +220,7 @@ class ArrivalReceiver : BroadcastReceiver() {
         WorkManager.getInstance(ctx).enqueue(OneTimeWorkRequestBuilder<ArrivalWorker>()
             .setInputData(workDataOf("to" to r.to, "text" to r.text, "place" to r.place))
             .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
+    }
     }
 }
 

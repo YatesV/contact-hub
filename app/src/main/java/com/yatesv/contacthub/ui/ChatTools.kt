@@ -516,7 +516,8 @@ fun PhotoEditor(source: Uri, onDismiss: () -> Unit, onDone: (File) -> Unit) {
                 IconButton({ if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) }, enabled = strokes.isNotEmpty()) {
                     Icon(Icons.AutoMirrored.Filled.Undo, "Undo", tint = if (strokes.isNotEmpty()) Color.White else Color.Gray)
                 }
-                IconButton({ bmp?.let { b -> val baked = bake(b); bmp = Bitmap.createBitmap(baked, 0, 0, baked.width, baked.height, Matrix().apply { postRotate(90f) }, true); crop = Rect(0f, 0f, 1f, 1f) } }) {
+                IconButton({ bmp?.let { b -> runCatching { val baked = bake(b); bmp = Bitmap.createBitmap(baked, 0, 0, baked.width, baked.height, Matrix().apply { postRotate(90f) }, true); crop = Rect(0f, 0f, 1f, 1f) }
+                    .onFailure { Hub.banner.value = "Couldn't rotate this photo" } } }) {
                     Icon(Icons.Default.RotateRight, "Rotate", tint = Color.White)
                 }
                 IconButton({ mode = if (mode == "crop") "draw" else "crop" }) { Icon(Icons.Default.Crop, "Crop", tint = if (mode == "crop") MaterialTheme.colorScheme.primary else Color.White) }
@@ -610,7 +611,8 @@ fun loadScaled(ctx: Context, uri: Uri, max: Int): Bitmap? = runCatching {
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     var sample = 1
-    while (maxOf(opts.outWidth, opts.outHeight) / sample > max * 2) sample *= 2
+    if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
+    while (maxOf(opts.outWidth, opts.outHeight) / sample > max) sample *= 2
     var b = ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) } ?: return null
     // Camera photos store rotation separately
     val deg = runCatching {

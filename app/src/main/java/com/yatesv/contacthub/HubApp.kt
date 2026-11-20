@@ -48,6 +48,7 @@ object Hub {
     /** Background work. A failure in one job is logged instead of crashing the whole app. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
         com.yatesv.contacthub.data.HubLog.w("Hub", "background job failed: " + e.stackTraceToString().take(1500), e)
+        com.yatesv.contacthub.engine.CrashLog.caught("background job", e)
     })
 
     /** Bumped whenever messages change, so open screens reload. */

@@ -576,31 +576,86 @@ fun panic(activity: android.app.Activity) {
 
 // ---------------- Crash report ----------------
 
-/** After a crash: shows what happened, with a button to share the report. */
+/** Pops up whenever there's a crash or bug report you haven't seen: why it happened, plus the full report. */
 @Composable
 fun CrashReportDialog() {
     val ctx = LocalContext.current
-    var report by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yatesv.contacthub.engine.CrashLog.unseen(ctx) } }
-    val r = report ?: return
+    val ver by com.yatesv.contacthub.engine.CrashLog.version.collectAsState()
+    val resumed = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    var list by remember { mutableStateOf<List<com.yatesv.contacthub.engine.CrashLog.Report>>(emptyList()) }
+    LaunchedEffect(ver, resumed.value == androidx.lifecycle.Lifecycle.State.RESUMED) {
+        if (resumed.value == androidx.lifecycle.Lifecycle.State.RESUMED)
+            list = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.yatesv.contacthub.engine.CrashLog.unseen(ctx) }.getOrDefault(emptyList()) }
+    }
+    val r = list.firstOrNull() ?: return
+    ReportDialog(r, more = list.size - 1, onClose = { com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); list = emptyList() },
+        onNext = { list = list.drop(1); if (list.isEmpty()) com.yatesv.contacthub.engine.CrashLog.markSeen(ctx) })
+}
+
+@Composable
+fun ReportDialog(r: com.yatesv.contacthub.engine.CrashLog.Report, more: Int = 0, onClose: () -> Unit, onNext: (() -> Unit)? = null) {
+    val ctx = LocalContext.current
+    var full by remember(r.file) { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = { com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null },
-        title = { Text("Orbit closed unexpectedly") },
+        onDismissRequest = onClose,
+        title = { Text(r.title) },
         text = {
-            Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
-                Text("Here's what went wrong. Share it so it can be fixed.", style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(8.dp))
-                Text(r.take(3000), style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                Text(java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault()).format(java.util.Date(r.at)),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                Text("Why", style = MaterialTheme.typography.titleSmall)
+                Text(r.why.ifBlank { "Unknown" }, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(10.dp))
+                TextButton({ full = !full }) { Text(if (full) "Hide full report" else "Show full report") }
+                if (full) Text(r.text.take(20_000), style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (more > 0) Text("+$more more report${if (more == 1) "" else "s"}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
         },
         confirmButton = {
-            TextButton({
-                ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, r), "Share crash report")
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null
-            }) { Text("Share report") }
+            Row {
+                TextButton({
+                    val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Orbit report", r.text))
+                    Hub.banner.value = "Report copied"
+                }) { Text("Copy") }
+                TextButton({
+                    runCatching { ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, r.text), "Share report")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }) { Text("Share") }
+                if (more > 0 && onNext != null) TextButton(onNext) { Text("Next") }
+            }
         },
-        dismissButton = { TextButton({ com.yatesv.contacthub.engine.CrashLog.markSeen(ctx); report = null }) { Text("Dismiss") } },
+        dismissButton = { TextButton(onClose) { Text("Close") } },
     )
+}
+
+/** Settings → Crash & bug reports: every report Orbit has saved. */
+@Composable
+fun ReportsPage() {
+    val ctx = LocalContext.current
+    val ver by com.yatesv.contacthub.engine.CrashLog.version.collectAsState()
+    var list by remember { mutableStateOf<List<com.yatesv.contacthub.engine.CrashLog.Report>?>(null) }
+    var open by remember { mutableStateOf<com.yatesv.contacthub.engine.CrashLog.Report?>(null) }
+    LaunchedEffect(ver) { list = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yatesv.contacthub.engine.CrashLog.all(ctx) } }
+    val fmt = remember { java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault()) }
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        val l = list
+        when {
+            l == null -> {}
+            l.isEmpty() -> Text("No crashes or bugs recorded. 🎉", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> {
+                l.forEach { r ->
+                    Column(Modifier.fillMaxWidth().clickable { open = r }.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                        Text(when (r.kind) { "crash" -> "💥 Crash"; "freeze" -> "🧊 Freeze"; else -> "🐞 Bug (kept running)" } + " · " + fmt.format(java.util.Date(r.at)),
+                            style = MaterialTheme.typography.titleSmall)
+                        Text(r.why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    }
+                }
+                TextButton({ com.yatesv.contacthub.engine.CrashLog.clear(ctx) }, Modifier.padding(12.dp)) { Text("Clear all reports", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+    }
+    open?.let { r -> ReportDialog(r, onClose = { open = null }) }
 }

@@ -282,23 +282,25 @@ object HubSms {
 }
 
 class SmsDeliverReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("HubSms") {
         if (intent.action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) return
         val p = goAsync()
         Hub.scope.launch { try { HubSms.onSmsReceived(ctx, intent) } finally { p.finish() } }
     }
+    }
 }
 
 class MmsPushReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("HubSms") {
         if (intent.action != Telephony.Sms.Intents.WAP_PUSH_DELIVER_ACTION) return
         val p = goAsync()
         Hub.scope.launch { try { HubSms.onMmsNotification(ctx, intent) } finally { p.finish() } }
     }
+    }
 }
 
 class SmsStatusReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("HubSms") {
         val code = resultCode
         val p = goAsync()
         Hub.scope.launch {
@@ -306,6 +308,7 @@ class SmsStatusReceiver : BroadcastReceiver() {
                 if (intent.action?.endsWith("MMS_DOWNLOADED") == true) HubSms.onMmsDownloaded(ctx, intent) else HubSms.onSent(ctx, intent, code)
             } finally { p.finish() }
         }
+    }
     }
 }
 

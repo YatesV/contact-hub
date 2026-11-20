@@ -48,9 +48,10 @@ import kotlinx.coroutines.launch
 
 /** Home screen widget for one person: photo, name, your latest message, tap to text, call button. */
 class PersonWidget : AppWidgetProvider() {
-    override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
+    override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) { com.yatesv.contacthub.data.safely("PersonWidget") {
         val p = goAsync()
         Hub.scope.launch { try { ids.forEach { id -> runCatching { draw(ctx, mgr, id) } } } finally { p.finish() } }
+    }
     }
 
     override fun onDeleted(ctx: Context, ids: IntArray) { ids.forEach { Hub.orbit.setWidgetNumber(it, null) } }

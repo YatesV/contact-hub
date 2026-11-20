@@ -14,7 +14,7 @@ import com.yatesv.contacthub.ui.HubWidget
 import kotlinx.coroutines.launch
 
 class ActionReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("Receivers") {
         val key = intent.getStringExtra("conv").orEmpty()
         when (intent.action) {
             REPLY -> {
@@ -40,6 +40,7 @@ class ActionReceiver : BroadcastReceiver() {
             }
         }
     }
+    }
 
     companion object {
         const val REPLY = "com.yatesv.contacthub.REPLY"
@@ -62,7 +63,7 @@ class ActionReceiver : BroadcastReceiver() {
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
+    override fun onReceive(ctx: Context, intent: Intent) { com.yatesv.contacthub.data.safely("Receivers") {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED -> {
                 HubApp.scheduleWork(ctx)
@@ -75,15 +76,17 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_MY_PACKAGE_REPLACED -> { Arrivals.syncAll(ctx); DailyWorker.schedule(ctx) }
         }
     }
+    }
 }
 
 /** Quick Settings tile that turns auto-reply on and off. */
 class AutoReplyTile : TileService() {
     override fun onStartListening() { update() }
-    override fun onClick() {
+    override fun onClick() { com.yatesv.contacthub.data.safely("Receivers") {
         Hub.settings.update { it.copy(autoReplyOn = !it.autoReplyOn) }
         HubWidget.refresh(this)
         update()
+    }
     }
     private fun update() {
         val on = Hub.settings.value.autoReplyOn

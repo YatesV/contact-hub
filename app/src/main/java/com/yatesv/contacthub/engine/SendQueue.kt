@@ -26,7 +26,7 @@ object SendQueue {
     private var started = false
     private var nextId = System.currentTimeMillis()
 
-    fun add(ctx: Context, key: String, body: String): Item {
+    @Synchronized fun add(ctx: Context, key: String, body: String): Item {
         val item = Item(nextId++, key, body, System.currentTimeMillis())
         items.update { it + item }
         start(ctx)

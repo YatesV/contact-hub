@@ -16,6 +16,8 @@ android {
         // CI sets VERSION_CODE so every build installs over the last one
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = "1.0." + (System.getenv("VERSION_CODE") ?: "0")
+        // Only the S24's chip type: keeps the on-device AI libraries from quadrupling the APK size
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     // Fixed key kept in the repo so new builds install as updates (your data is kept)
@@ -80,6 +82,10 @@ dependencies {
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // On-device smart replies, language detection and translation (no account or key needed)
+    implementation("com.google.mlkit:smart-reply:17.0.4")
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation("com.google.mlkit:translate:17.0.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

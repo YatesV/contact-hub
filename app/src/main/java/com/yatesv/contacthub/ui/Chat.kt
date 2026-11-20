@@ -53,6 +53,11 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Snooze
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -190,6 +195,11 @@ fun ChatScreen(key: String) {
     var scheduling by remember { mutableStateOf(false) }
     var groupDialog by remember { mutableStateOf(false) }
     var colorDialog by remember { mutableStateOf(false) }
+    var catchUp by remember { mutableStateOf(false) }
+    var snoozing by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    /** Translations you asked for, by message */
+    val translations = remember(key) { androidx.compose.runtime.mutableStateMapOf<String, String>() }
     /** Messages you just sent that haven't shown up in the real list yet (shown greyed as "Sending…"). */
     val queue by com.yatesv.contacthub.engine.SendQueue.items.collectAsState()
     var failedTap by remember { mutableStateOf<com.yatesv.contacthub.engine.SendQueue.Item?>(null) }
@@ -314,6 +324,10 @@ fun ChatScreen(key: String) {
                     Box {
                         IconButton({ menu = true }) { Icon(Icons.Default.MoreHoriz, "More", tint = MaterialTheme.colorScheme.primary) }
                         DropdownMenu(menu, { menu = false }) {
+                            DropdownMenuItem({ Text("Catch me up") }, { menu = false; catchUp = true }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) })
+                            DropdownMenuItem({ Text("Search in chat") }, { menu = false; searching = true; limit = maxOf(limit, 1000) }, leadingIcon = { Icon(Icons.Default.Search, null) })
+                            DropdownMenuItem({ Text(if (Hub.orbit.snoozes().containsKey(key)) "Snoozed · change" else "Snooze chat") }, { menu = false; snoozing = true },
+                                leadingIcon = { Icon(Icons.Default.Snooze, null) })
                             if (isGroup) DropdownMenuItem({ Text("Group name, photo & colors") }, { menu = false; groupDialog = true })
                             else DropdownMenuItem({ Text("Contact page") }, { menu = false; addresses.firstOrNull()?.let { Nav.go(Screen.Contact(it)) } })
                             DropdownMenuItem({ Text(if (meta.muted) "Unmute" else "Mute") }, { menu = false; scope.launch { InboxData.updateMeta(key) { it.copy(muted = !it.muted) } } })
@@ -354,6 +368,14 @@ fun ChatScreen(key: String) {
                     .map { q -> Msg("q:${q.id}", q.body, q.created, true, status = if (q.state == "failed") 2 else 1) }
                 val justSent = queue.filter { it.key == key && it.state == "sent" }.map { it.body }.toSet()
                 val msgs = real + waiting
+                /** Scrolls the chat to a message, if it's loaded. */
+                fun scrollTo(msgKey: String) {
+                    val idx = msgs.asReversed().indexOfFirst { it.key == msgKey }
+                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx); showTimes = showTimes + msgKey }
+                    else scope.launch { limit = maxOf(limit, 2000); snack.showSnackbar("That message is further back. Loading older messages…") }
+                }
+                PinnedBar(key) { p -> scrollTo(p.msgKey) }
+                if (searching) ChatSearch(msgs, onOpen = { m -> searching = false; scrollTo(m.key) }, onClose = { searching = false })
                 LaunchedEffect(data) {
                     if (data != null && !initialDone) { seen.addAll(real.map { it.key }); initialDone = true }
                 }
@@ -407,6 +429,7 @@ fun ChatScreen(key: String) {
                                     else -> false
                                 },
                                 onPhone = { phoneTap = it },
+                                translation = translations[m.key],
                             ) }
                             }
                             }
@@ -436,6 +459,7 @@ fun ChatScreen(key: String) {
                     }
                 }
 
+                if (text.isEmpty()) SmartReplyRow(key, real) { r -> text = r; runCatching { focus.requestFocus() } }
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f)) {
                     var plus by remember { mutableStateOf(false) }
                     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
@@ -502,16 +526,34 @@ fun ChatScreen(key: String) {
             selected = null
             if (l.kind == com.yatesv.contacthub.data.Links.Kind.PHONE) phoneTap = l.text else openLink(ctx, l)
         }
+        val pinned = Hub.orbit.pins(key).any { it.msgKey == m.key }
+        val extra = buildList<Pair<String, () -> Unit>> {
+            if (!m.key.startsWith("q:")) add((if (pinned) "Unpin" else "Pin to top") to {
+                selected = null
+                if (pinned) Hub.orbit.unpin(key, m.key) else Hub.orbit.pin(key, com.yatesv.contacthub.data.PinnedMsg(m.key, m.body, m.date))
+            })
+            if (m.body.isNotBlank() && !m.outgoing) add((if (translations.containsKey(m.key)) "Hide translation" else "Translate") to {
+                selected = null
+                if (translations.remove(m.key) == null) scope.launch {
+                    translations[m.key] = "Translating…"
+                    com.yatesv.contacthub.engine.Ai.translate(m.body)
+                        .onSuccess { (t, from) -> translations[m.key] = if (t == m.body) "Already in your language ($from)" else "$t  ·  from $from" }
+                        .onFailure { translations.remove(m.key); snack.showSnackbar("Couldn't translate: ${it.message}") }
+                }
+            })
+        }
         if (settings.menuStyle == "ios") {
             IosMessageMenu(m, bounds[m.key], isStarred, if (m.outgoing && meta.bubbleColor != 0) Color(meta.bubbleColor.toLong() and 0xFFFFFFFFL)
                 else if (m.outgoing) style.sent else style.recv,
                 if (m.outgoing) style.sentText else style.recvText,
-                onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink)
+                onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink, extra = extra)
         } else {
-            MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink)
+            MessageActions(m, isStarred, onDismiss = { selected = null }, onReact = onReact, onStar = onStar, onCopy = onCopy, onSelect = onSelect, onLink = onLink, extra = extra)
         }
     }
     phoneTap?.let { n -> PhoneActions(n) { phoneTap = null } }
+    if (catchUp) CatchUpSheet(data?.msgs.orEmpty(), isGroup, name) { catchUp = false }
+    if (snoozing) SnoozeDialog(key) { snoozing = false }
     selectText?.let { t -> SelectTextDialog(t) { selectText = null } }
 
     failedTap?.let { f ->
@@ -524,14 +566,15 @@ fun ChatScreen(key: String) {
         )
     }
 
-    if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at ->
+    if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at, repeat ->
         scheduling = false
         val body = text.trim()
         text = ""
         scope.launch {
-            dao.schedule(Scheduled(convKey = key, addresses = addresses.joinToString(","), body = body, sendAt = at))
+            val id = dao.schedule(Scheduled(convKey = key, addresses = addresses.joinToString(","), body = body, sendAt = at))
+            if (repeat.isNotBlank()) Hub.orbit.setRepeat(id, repeat)
             ScheduleWorker.enqueue(ctx, at - System.currentTimeMillis())
-            snack.showSnackbar("Scheduled for ${fullTime(at)}")
+            snack.showSnackbar("Scheduled for ${fullTime(at)}" + if (repeat.isNotBlank()) " · ${com.yatesv.contacthub.data.Recurring.label(repeat).lowercase()}" else "")
         }
     }
 
@@ -580,6 +623,7 @@ internal fun Bubble(
     /** Load a title + picture for the first link */
     allowPreview: Boolean = false,
     onPhone: (String) -> Unit = {},
+    translation: String? = null,
 ) {
     // Double-tap effect: bubble bounces, a big emoji pops, and little dots burst out
     var bursts by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -633,14 +677,28 @@ internal fun Bubble(
                     .padding(if (emojiOnly) 2.dp else 0.dp),
             ) {
                 m.attachments.forEach { a ->
-                    AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
-                        .clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) },
-                        contentScale = ContentScale.Crop)
+                    when {
+                        a.mime.startsWith("audio") -> AudioAttachment(a.uri, fg)
+                        a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime)
+                        a.mime.startsWith("image") -> AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
+                            .clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) },
+                            contentScale = ContentScale.Crop)
+                        // Contact cards, PDFs and other files: a tappable row instead of a broken picture
+                        else -> Row(Modifier.clickable {
+                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                .onFailure { Hub.banner.value = "No app on this phone opens ${a.mime} files" }
+                        }.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (a.mime.contains("vcard")) Icons.Default.Person else Icons.Default.AttachFile, null, tint = fg)
+                            Text(if (a.mime.contains("vcard")) "  Contact card" else "  ${a.mime.substringAfter('/').uppercase()} file", color = fg)
+                        }
+                    }
                 }
                 if (m.body.isNotBlank()) {
                     LinkText(m.body, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
                         fontSize = if (emojiOnly) (16 * style.emojiScale * 1.5f).sp else 16.sp,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), onPhone = onPhone)
+                    if (translation != null) Text(translation, color = fg.copy(alpha = 0.85f), fontSize = 14.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 9.dp))
                     if (allowPreview && !emojiOnly) {
                         val url = remember(m.body) { com.yatesv.contacthub.data.Links.firstUrl(m.body) }
                         if (url != null) LinkPreviewCard(url, fg)
@@ -696,7 +754,7 @@ internal fun Bubble(
 
 @Composable
 private fun MessageActions(m: Msg, isStarred: Boolean, onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit,
-                           onSelect: () -> Unit = {}, onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = {}) {
+                           onSelect: () -> Unit = {}, onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = {}, extra: List<Pair<String, () -> Unit>> = emptyList()) {
     AlertDialog(
         onDismissRequest = onDismiss,
         text = {
@@ -712,6 +770,7 @@ private fun MessageActions(m: Msg, isStarred: Boolean, onDismiss: () -> Unit, on
                 com.yatesv.contacthub.data.Links.find(m.body).distinctBy { it.target }.take(3).forEach { l -> TextButton({ onLink(l) }) { Text(linkLabel(l)) } }
                 TextButton({ onCopy(m.body) }) { Text("Copy text") }
                 if (m.body.isNotBlank()) TextButton(onSelect) { Text("Select text") }
+                extra.forEach { (label, act) -> TextButton(act) { Text(label) } }
                 Otp.find(m.body)?.let { code -> TextButton({ onCopy(code) }) { Text("Copy code $code") } }
                 TextButton({ onStar(!isStarred) }) { Text(if (isStarred) "Unstar" else "Star") }
                 Text(fullTime(m.date) + (if (m.rcs) " · RCS" else ""), style = MaterialTheme.typography.labelSmall,
@@ -728,7 +787,9 @@ fun copy(ctx: Context, s: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
+fun ScheduleDialog(onDismiss: () -> Unit, onPickRepeat: (Long, String) -> Unit) {
+    var repeat by remember { mutableStateOf("") }
+    val onPick: (Long) -> Unit = { onPickRepeat(it, repeat) }
     var custom by remember { mutableStateOf(false) }
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     fun at(daysAhead: Int, hour: Int, min: Int = 0) = Calendar.getInstance().apply {
@@ -746,6 +807,10 @@ fun ScheduleDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
                     TextButton({ onPick(at(1, 9)) }) { Text("Tomorrow, 9:00 AM") }
                     TextButton({ onPick(at(1, 13)) }) { Text("Tomorrow, 1:00 PM") }
                     TextButton({ custom = true }) { Text("Pick date & time…") }
+                    Text("Repeat", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        com.yatesv.contacthub.data.Recurring.RULES.forEach { (k, l) -> androidx.compose.material3.FilterChip(repeat == k, { repeat = k }, { Text(l) }) }
+                    }
                 }
             },
             confirmButton = { TextButton(onDismiss) { Text("Cancel") } },

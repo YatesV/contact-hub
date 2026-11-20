@@ -68,7 +68,9 @@ object Notifier {
         val extra = if (!Phone.isGroupKey(key)) Hub.db.dao().extra(key) else null
         if (meta?.muted == true) return
         val hidden = meta?.hidden == true || s.hidePreviews
-        val channel = channelFor(ctx, key, meta?.soundUri.orEmpty(), extra?.priority == true || mention)
+        // A chat's own sound wins, then a contact group's sound
+        val groupSound = if (!Phone.isGroupKey(key)) Hub.orbit.groupsOf(key).firstOrNull { it.soundUri.isNotBlank() }?.soundUri.orEmpty() else ""
+        val channel = channelFor(ctx, key, meta?.soundUri.orEmpty().ifBlank { groupSound }, extra?.priority == true || mention)
 
         val b = NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_tile)
@@ -78,7 +80,7 @@ object Notifier {
             .setColor(s.accent)
 
         if (hidden) {
-            b.setContentTitle("New message").setContentText("Open Contact Hub to read it")
+            b.setContentTitle("New message").setContentText("Open Orbit to read it")
         } else {
             val me = Person.Builder().setName("You").build()
             val style = NotificationCompat.MessagingStyle(me)
@@ -94,10 +96,18 @@ object Notifier {
             val replyIntent = PendingIntent.getBroadcast(ctx, ("r" + key).hashCode(),
                 Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.REPLY).putExtra("conv", key),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+            // Quick-reply choices (also shown on a Galaxy Watch), from on-device Smart Reply
+            val choices = if (s.smartReplies) runCatching {
+                kotlinx.coroutines.withTimeoutOrNull(1500) {
+                    Ai.onDeviceReplies(lines.mapIndexed { i, (who, text) ->
+                        com.yatesv.contacthub.data.Msg("n$i", text, now - (lines.size - i) * 1000L, who == "You", sender = who)
+                    })
+                }
+            }.getOrNull().orEmpty() else emptyList()
             b.addAction(NotificationCompat.Action.Builder(R.drawable.ic_tile, "Reply", replyIntent)
-                .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel("Reply").build())
+                .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel("Reply").apply { if (choices.isNotEmpty()) setChoices(choices.toTypedArray()) }.build())
                 .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
-                .setAllowGeneratedReplies(false).build())
+                .setAllowGeneratedReplies(true).build())
         }
         val readIntent = PendingIntent.getBroadcast(ctx, ("m" + key).hashCode(),
             Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.READ).putExtra("conv", key),

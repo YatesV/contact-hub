@@ -44,11 +44,17 @@ object Hub {
     lateinit var sms: SmsRepo
     lateinit var contacts: ContactsRepo
     lateinit var l360: Life360
+    lateinit var orbit: com.yatesv.contacthub.data.OrbitStore
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Bumped whenever messages change, so open screens reload. */
     val version = MutableStateFlow(0L)
-    fun changed() { version.value = System.nanoTime() }
+    private var widgetJob: kotlinx.coroutines.Job? = null
+    fun changed() {
+        version.value = System.nanoTime()
+        // Person widgets show the latest message: redraw them shortly after changes settle
+        if (::app.isInitialized) { widgetJob?.cancel(); widgetJob = scope.launch { kotlinx.coroutines.delay(2500); com.yatesv.contacthub.ui.PersonWidget.refreshAll(app) } }
+    }
 
     /** Latest reply buttons from the Messages app, per conversation. */
     val replies = ConcurrentHashMap<String, ReplyHandle>()
@@ -75,9 +81,13 @@ class HubApp : Application() {
         Hub.sms = SmsRepo(this)
         Hub.contacts = ContactsRepo(this)
         Hub.l360 = Life360(this)
+        Hub.orbit = com.yatesv.contacthub.data.OrbitStore(this)
         Configuration.getInstance().userAgentValue = packageName
         Notifier.createChannels(this)
         com.yatesv.contacthub.engine.MockService.createChannel(this)
+        com.yatesv.contacthub.engine.OrbitNotes.channel(this)
+        runCatching { com.yatesv.contacthub.engine.DailyWorker.schedule(this) }
+        runCatching { com.yatesv.contacthub.engine.Arrivals.sync(this) }
         runCatching { scheduleWork(this) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
         Hub.scope.launch { runCatching { Hub.contacts.all() } }
     }

@@ -2,6 +2,7 @@
 <resources>
     <color name="bg">#FF101318</color>
     <color name="brand">#FF3D7BFF</color>
+    <color name="icon_bg">#FF000000</color>
     <color name="widget_bg">#E6181C24</color>
     <color name="widget_chip">#FF2A3140</color>
 </resources>

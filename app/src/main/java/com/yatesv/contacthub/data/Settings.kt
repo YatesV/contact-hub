@@ -60,6 +60,15 @@ data class Settings(
     val l360RefreshMin: Int = 0,            // 0 = only when you open a contact
     val l360Enabled: Boolean = true,
 
+    // Orbit extras
+    val smartReplies: Boolean = true,
+    val aiProvider: String = "off",         // off, xai, openai
+    val aiKey: String = "",
+    val aiModel: String = "",               // picked automatically from the provider's model list
+    val translateTo: String = "",           // "" = phone language
+    val birthdayReminders: Boolean = true,
+    val panicShake: Boolean = false,
+
     // Mock location
     val mapboxToken: String = "",           // free public token (pk.…); empty = OpenStreetMap
     val mockMapStyle: String = "streets",   // streets, satellite
@@ -110,7 +119,8 @@ data class Settings(
         put("olderThan6Months", olderThan6Months); put("autoReplyOn", autoReplyOn); put("autoReplyText", autoReplyText); put("myName", myName)
         put("appLock", appLock); put("useBiometric", useBiometric); put("pinHash", pinHash); put("lockAfterSec", lockAfterSec)
         put("hidePreviews", hidePreviews); put("l360Token", l360Token); put("l360RefreshMin", l360RefreshMin)
-        put("l360Enabled", l360Enabled); put("mapboxToken", mapboxToken); put("mockMapStyle", mockMapStyle); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
+        put("l360Enabled", l360Enabled); put("mapboxToken", mapboxToken); put("smartReplies", smartReplies); put("aiProvider", aiProvider); put("aiKey", aiKey); put("aiModel", aiModel)
+        put("translateTo", translateTo); put("birthdayReminders", birthdayReminders); put("panicShake", panicShake); put("mockMapStyle", mockMapStyle); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
         put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
@@ -144,7 +154,9 @@ data class Settings(
                 pinHash = j.optString("pinHash", ""), lockAfterSec = j.optInt("lockAfterSec", 30),
                 hidePreviews = j.optBoolean("hidePreviews", false), l360Token = j.optString("l360Token", ""),
                 l360RefreshMin = j.optInt("l360RefreshMin", 0), l360Enabled = j.optBoolean("l360Enabled", true),
-                mapboxToken = j.optString("mapboxToken", ""), mockMapStyle = j.optString("mockMapStyle", "streets"),
+                mapboxToken = j.optString("mapboxToken", ""), smartReplies = j.optBoolean("smartReplies", true),
+                aiProvider = j.optString("aiProvider", "off"), aiKey = j.optString("aiKey", ""), aiModel = j.optString("aiModel", ""),
+                translateTo = j.optString("translateTo", ""), birthdayReminders = j.optBoolean("birthdayReminders", true), panicShake = j.optBoolean("panicShake", false), mockMapStyle = j.optString("mockMapStyle", "streets"),
                 backupDaily = j.optBoolean("backupDaily", true), lastBackup = j.optLong("lastBackup", 0),
                 onboarded = j.optBoolean("onboarded", false),
                 motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
@@ -180,5 +192,5 @@ class SettingsStore(ctx: Context) {
     }
 
     /** Settings for backups, without secrets. */
-    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "", driveUri = "", mapboxToken = "").toJson()
+    fun exportJson(): JSONObject = value.copy(l360Token = "", pinHash = "", driveUri = "", mapboxToken = "", aiKey = "").toJson()
 }

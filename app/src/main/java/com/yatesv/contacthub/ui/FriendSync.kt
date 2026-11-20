@@ -143,7 +143,7 @@ private const val TIKTOK_SCRIPT = """
 private enum class Phase { LOGIN, SYNCING, REVIEW, DONE }
 
 /**
- * Sign in to Instagram or TikTok inside Contact Hub, read who you follow, match them to your
+ * Sign in to Instagram or TikTok inside Orbit, read who you follow, match them to your
  * contacts by name, and link the ones you confirm. Nothing leaves your phone except the normal
  * requests to Instagram/TikTok themselves.
  */

@@ -79,14 +79,23 @@ private fun CallScreen(c: CallUi) {
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     val wallpaper = Hub.settings.value.wallpaper
 
+    val spam = remember(c.number) {
+        com.yatesv.contacthub.data.Spam.reason(c.number, contact != null, Hub.orbit.isReportedSpam(c.number), c.verificationFailed,
+            runCatching { com.yatesv.contacthub.engine.HubSms.myNumbers(Hub.app).toList() }.getOrDefault(emptyList()))
+    }
+    var reported by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val bg = contact?.photo ?: wallpaper.ifBlank { null }
-        if (bg != null) AsyncImage(bg, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.45f)
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
+        // Their photo fills the whole screen (full strength at the top, fading into black for the buttons)
+        if (bg != null) AsyncImage(bg, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = if (contact?.photo != null) 1f else 0.45f)
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.25f), 0.45f to Color.Transparent, 1f to Color.Black)))
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(48.dp))
-            Avatar(name, contact?.photo, 112.dp)
+            if (contact?.photo == null) Avatar(name, null, 112.dp)
             Spacer(Modifier.height(16.dp))
+            if (spam != null && !c.outgoing) Text("⚠️ Possible spam · $spam", color = Color.White, fontSize = 14.sp,
+                modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).background(Color(0xCCE53935)).padding(horizontal = 12.dp, vertical = 6.dp))
+            Spacer(Modifier.height(8.dp))
             Text(name, color = Color.White, fontSize = 30.sp, style = MaterialTheme.typography.headlineMedium)
             if (contact != null) Text(Phone.pretty(c.number), color = Color.White.copy(alpha = 0.7f))
             Spacer(Modifier.height(8.dp))
@@ -105,6 +114,10 @@ private fun CallScreen(c: CallUi) {
             Spacer(Modifier.weight(1f))
 
             if (c.state == Call.STATE_RINGING) {
+                if (contact == null && !reported) androidx.compose.material3.TextButton({
+                    reported = true; Hub.orbit.setSpam(c.number, true); Hub.contacts.setBlocked(c.number, true); CallManager.hangup()
+                }) { Text("Report spam & block", color = Color.White.copy(alpha = 0.85f)) }
+                Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     RoundButton(Icons.Default.CallEnd, "Decline", Color(0xFFE53935)) { CallManager.hangup() }
                     RoundButton(Icons.Default.Call, "Answer", Color(0xFF43A047)) { CallManager.answer() }

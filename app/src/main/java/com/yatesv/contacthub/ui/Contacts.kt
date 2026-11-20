@@ -72,6 +72,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -106,7 +108,14 @@ fun ContactsScreen() {
     var q by remember { mutableStateOf("") }
     val version by Hub.version.collectAsState()
     LaunchedEffect(version) { list = Hub.contacts.all().distinctBy { it.id } }
+    var groupFilter by remember { mutableStateOf("") }
+    var manageGroups by remember { mutableStateOf(false) }
+    val orbitV by Hub.orbit.version.collectAsState()
+    val allGroups = remember(orbitV) { Hub.orbit.groups() }
+    val groupMembers = remember(groupFilter, allGroups) { allGroups.firstOrNull { it.id == groupFilter }?.members?.toSet() }
+    val groupsByNumber = remember(allGroups) { allGroups.flatMap { g -> g.members.map { it to g } }.groupBy({ it.first }, { it.second }) }
     val shown = list.orEmpty().filter { q.isBlank() || it.name.contains(q, true) || Phone.norm(it.number).contains(Phone.norm(q).ifEmpty { "~" }) }
+        .filter { groupMembers == null || Phone.norm(it.number) in groupMembers }
     val favorites = shown.filter { it.starred }
 
     val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -124,9 +133,11 @@ fun ContactsScreen() {
         Column(Modifier.padding(pad)) {
             OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp), singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search ${list?.size ?: ""} contacts") })
+            GroupChips(groupFilter, { groupFilter = it }) { manageGroups = true }
+            if (manageGroups) GroupsDialog(list.orEmpty()) { manageGroups = false }
             LazyColumn(Modifier.fillMaxSize()) {
-                if (q.isBlank()) item { FriendSyncCard() }
-                if (favorites.isNotEmpty() && q.isBlank()) {
+                if (q.isBlank() && groupFilter.isBlank()) item { FriendSyncCard() }
+                if (favorites.isNotEmpty() && q.isBlank() && groupFilter.isBlank()) {
                     item { SectionTitle("Favorites") }
                     item {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -149,6 +160,7 @@ fun ContactsScreen() {
                             Text(c.name)
                             Text(Phone.pretty(c.number), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        groupsByNumber[Phone.norm(c.number)].orEmpty().take(3).forEach { g -> Box(Modifier.padding(start = 4.dp).size(8.dp).clip(CircleShape).background(Color(g.color))) }
                         if (c.starred) Icon(Icons.Default.Star, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                     }
                 }
@@ -283,6 +295,9 @@ fun ContactScreen(number: String) {
                 )
             }
 
+            // Today's Life360 trail
+            if (member != null) TrailCard(member.id)
+
             // Stats
             SectionTitle("Stats")
             HubCard {
@@ -293,6 +308,10 @@ fun ContactScreen(number: String) {
                     Stat(talkTime(calls.sumOf { it.duration }), "talk time")
                 }
             }
+
+            SectionTitle("Your history")
+            RelationshipCard(number)
+            NudgeRow(number)
 
             // Birthday + notes
             SectionTitle("Birthday & notes")
@@ -307,6 +326,8 @@ fun ContactScreen(number: String) {
                 Text(extra.notes.ifBlank { "No notes yet. Only you can see these." }, color = if (extra.notes.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                 TextButton({ editNotes = true }, Modifier.align(Alignment.End)) { Text("Edit") }
             }
+
+            CallNotesSection(number)
 
             // Recent calls
             if (calls.isNotEmpty()) {
@@ -323,7 +344,7 @@ fun ContactScreen(number: String) {
             SectionTitle("Options")
             SwitchRow("Priority contact", "Their messages come through Do Not Disturb and show on the widget", extra.priority, Icons.Default.Star) { save(extra.copy(priority = it)) }
             SwitchRow("Block", if (blocked) "Blocked calls and texts" else "Block calls and texts from this number", blocked, Icons.Default.Block) {
-                if (Hub.contacts.setBlocked(number, it)) blocked = it else Hub.banner.value = "Make Contact Hub your default phone app to block numbers."
+                if (Hub.contacts.setBlocked(number, it)) blocked = it else Hub.banner.value = "Make Orbit your default phone app to block numbers."
             }
             Spacer(Modifier.height(40.dp))
         }
@@ -543,7 +564,7 @@ private fun SocialsDialog(e: ContactExtra, onDone: () -> Unit, onSave: (ContactE
         title = { Text("Socials") },
         text = {
             Column {
-                Text("Type a @username or paste a profile link. You can also tap Share on a profile in the app and pick Contact Hub.",
+                Text("Type a @username or paste a profile link. You can also tap Share on a profile in the app and pick Orbit.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(ig, { ig = it }, label = { Text("Instagram") }, singleLine = true)
                 OutlinedTextField(sc, { sc = it }, label = { Text("Snapchat") }, singleLine = true)
@@ -577,7 +598,7 @@ private fun NotesDialog(e: ContactExtra, contactBirthday: String?, onDone: () ->
     )
 }
 
-/** Shown after sharing an Instagram/Snapchat/TikTok profile into Contact Hub. */
+/** Shown after sharing an Instagram/Snapchat/TikTok profile into Orbit. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShareSocialScreen(social: Social, value: String) {

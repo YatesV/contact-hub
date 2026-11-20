@@ -161,6 +161,7 @@ fun MockScreen() {
     val favorites by MockStore.favorites.collectAsState()
     val history by MockStore.history.collectAsState()
     val schedules by MockStore.schedules.collectAsState()
+    val l360 by Hub.l360.members.collectAsState()
 
     // Setup state, re-checked every time you come back from Android settings
     var tick by remember { mutableIntStateOf(0) }
@@ -284,6 +285,7 @@ fun MockScreen() {
                 onCenter = { center = it },
                 onTap = { MapCenter.go(it) },
                 onLongPress = { if (mode == "route" && editing) addStop(it) else MapCenter.go(it) },
+                people = l360.filter { it.id != Hub.l360.meId && it.lat != null && it.lng != null }.map { it.firstName to LatLng(it.lat!!, it.lng!!) },
             )
 
             // The pin: whatever is under its tip is the spot
@@ -555,7 +557,7 @@ private fun SetupCard(ctx: Context) {
         SetupStep(1, "Turn on Developer options", "About phone → Software information → tap Build number 7 times, then enter your PIN.", dev, "Open About phone") {
             ctx.startActivity(Intent(AndroidSettings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
-        SetupStep(2, "Pick Contact Hub as the mock app", "Developer options → scroll to Debugging → Select mock location app → Contact Hub. Then come back here.", mockApp, "Open Developer options", enabled = dev) {
+        SetupStep(2, "Pick Orbit as the mock app", "Developer options → scroll to Debugging → Select mock location app → Orbit. Then come back here.", mockApp, "Open Developer options", enabled = dev) {
             runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
     }
@@ -790,7 +792,7 @@ private fun MockSettingsSheet(ctx: Context, onPerms: () -> Unit, onDone: () -> U
     ModalBottomSheet(onDone) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             SectionTitle("Map (Mapbox)")
-            Text("Free for personal use. Make a free account at mapbox.com and paste your default public token (starts with pk.). Without one, Contact Hub uses OpenStreetMap (no satellite).",
+            Text("Free for personal use. Make a free account at mapbox.com and paste your default public token (starts with pk.). Without one, Orbit uses OpenStreetMap (no satellite).",
                 Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(token, { token = it.trim() }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 label = { Text("Mapbox public token") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
@@ -807,7 +809,7 @@ private fun MockSettingsSheet(ctx: Context, onPerms: () -> Unit, onDone: () -> U
 
             SectionTitle("Setup checklist")
             CheckRow("Developer options", MockSetup.devOptionsOn(ctx)) { ctx.startActivity(Intent(AndroidSettings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            CheckRow("Contact Hub is the mock location app", MockSetup.isMockApp(ctx)) {
+            CheckRow("Orbit is the mock location app", MockSetup.isMockApp(ctx)) {
                 runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
             CheckRow("Location (blue dot, start from real location)", MockSetup.hasLocation(ctx), onClick = onPerms)
@@ -896,6 +898,7 @@ private fun dot(color: Int, sizeDp: Int, ctx: Context) = GradientDrawable().appl
 private fun MockMap(
     style: String, mock: LatLng?, real: LatLng?, realStale: Boolean, waypoints: List<LatLng>,
     path: List<LatLng>, activePath: List<LatLng>, onCenter: (LatLng) -> Unit, onTap: (LatLng) -> Unit, onLongPress: (LatLng) -> Unit,
+    people: List<Pair<String, LatLng>> = emptyList(),
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val accent = MaterialTheme.colorScheme.primary.toArgb()
@@ -943,13 +946,15 @@ private fun MockMap(
                 outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
                 isGeodesic = false
             }.also { ours += it }
-            fun marker(p: LatLng, icon: android.graphics.drawable.Drawable, title: String) = Marker(map).apply {
+            fun marker(p: LatLng, icon: android.graphics.drawable.Drawable, title: String, tapForName: Boolean = false) = Marker(map).apply {
                 position = GeoPoint(p.lat, p.lng); this.icon = icon; this.title = title
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER); setInfoWindow(null)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER); if (!tapForName) setInfoWindow(null)
             }.also { ours += it }
             if (activePath.size >= 2) line(activePath, android.graphics.Color.argb(110, 52, 199, 89), 6f)
             if (path.size >= 2) line(path, accent, 5f)
             waypoints.forEachIndexed { i, w -> marker(w, dot(if (i == waypoints.lastIndex) accent else android.graphics.Color.DKGRAY, 14, ctx), "Stop ${i + 1}") }
+            // Your Life360 people
+            people.forEach { (n, p) -> marker(p, dot(android.graphics.Color.rgb(175, 82, 222), 16, ctx), n, tapForName = true) }
             real?.let { marker(it, dot(if (realStale) android.graphics.Color.argb(170, 10, 132, 255) else android.graphics.Color.rgb(10, 132, 255), 16, ctx), "Real location") }
             mock?.let { marker(it, dot(android.graphics.Color.rgb(255, 69, 58), 22, ctx), "Mock location") }
             map.overlays.addAll(ours)

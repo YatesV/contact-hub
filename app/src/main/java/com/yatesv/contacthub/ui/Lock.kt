@@ -67,12 +67,12 @@ fun LockScreen(act: FragmentActivity, onUnlock: () -> Unit) {
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     val bio = s.useBiometric && canUseBiometric(act)
-    LaunchedEffect(Unit) { if (bio) biometricPrompt(act, "Unlock Contact Hub", onUnlock) }
+    LaunchedEffect(Unit) { if (bio) biometricPrompt(act, "Unlock Orbit", onUnlock) }
 
     Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Icon(Icons.Default.Lock, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(12.dp))
-        Text("Contact Hub is locked", style = MaterialTheme.typography.titleLarge)
+        Text("Orbit is locked", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(20.dp))
         if (s.pinHash.isNotBlank()) {
             Text("•".repeat(pin.length).ifEmpty { " " }, fontSize = 32.sp, letterSpacing = 6.sp)
@@ -97,7 +97,7 @@ fun LockScreen(act: FragmentActivity, onUnlock: () -> Unit) {
                 }
             }
         }
-        if (bio) TextButton({ biometricPrompt(act, "Unlock Contact Hub", onUnlock) }) {
+        if (bio) TextButton({ biometricPrompt(act, "Unlock Orbit", onUnlock) }) {
             Icon(Icons.Default.Fingerprint, null); Spacer(Modifier.size(8.dp)); Text("Use fingerprint")
         }
         if (!bio && s.pinHash.isBlank()) TextButton(onUnlock) { Text("Open") }

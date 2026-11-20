@@ -232,6 +232,17 @@ class SmsRepo(private val ctx: Context) {
         dates.size to dates.map { (it + tz.getOffset(it)) / 86_400_000L }.toSet()
     }
 
+    /** Every message's (date, sent by you) for the relationship card. */
+    suspend fun history(threadId: Long): List<Pair<Long, Boolean>> = withContext(Dispatchers.IO) {
+        if (threadId <= 0) return@withContext emptyList()
+        runCatching {
+            cr.query(Telephony.Sms.CONTENT_URI, arrayOf("date", "type"), "thread_id = ?", arrayOf(threadId.toString()), null)
+                .rows { it.long("date") to (it.int("type") != Telephony.Sms.MESSAGE_TYPE_INBOX) } +
+                cr.query(Telephony.Mms.CONTENT_URI, arrayOf("date", "msg_box"), "thread_id = ?", arrayOf(threadId.toString()), null)
+                    .rows { it.long("date") * 1000 to (it.int("msg_box") != Telephony.Mms.MESSAGE_BOX_INBOX) }
+        }.getOrDefault(emptyList())
+    }
+
     data class SearchHit(val threadId: Long, val address: String, val msg: Msg)
 
     suspend fun search(q: String): List<SearchHit> = withContext(Dispatchers.IO) {
@@ -325,7 +336,7 @@ class ContactsRepo(private val ctx: Context) {
     fun isBlocked(number: String): Boolean =
         runCatching { BlockedNumberContract.isBlocked(ctx, number) }.getOrDefault(false)
 
-    /** Only works while Contact Hub is the default phone app. */
+    /** Only works while Orbit is the default phone app. */
     fun setBlocked(number: String, blocked: Boolean): Boolean = runCatching {
         if (blocked) {
             val v = android.content.ContentValues().apply { put(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER, number) }

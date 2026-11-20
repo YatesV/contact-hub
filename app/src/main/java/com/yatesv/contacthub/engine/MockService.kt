@@ -195,7 +195,7 @@ object MockSetup {
     fun devOptionsOn(ctx: Context) =
         AndroidSettings.Global.getInt(ctx.contentResolver, AndroidSettings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
 
-    /** Contact Hub is picked in Developer options → Select mock location app. */
+    /** Orbit is picked in Developer options → Select mock location app. */
     fun isMockApp(ctx: Context): Boolean = runCatching {
         val ops = ctx.getSystemService(AppOpsManager::class.java)
         ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_MOCK_LOCATION, Process.myUid(), ctx.packageName) == AppOpsManager.MODE_ALLOWED
@@ -275,7 +275,7 @@ class MockService : Service() {
         createChannel(this)
         startInForeground(note("Starting mock location…", null))
         val (it, prog, wasPaused) = MockStore.session() ?: run { end(); return }
-        if (!MockSetup.isMockApp(this)) return fail("Pick Contact Hub in Developer options → Select mock location app.")
+        if (!MockSetup.isMockApp(this)) return fail("Pick Orbit in Developer options → Select mock location app.")
         item = it; progress = prog; paused = wasPaused
         heading = Drift.heading(it.id.hashCode().toLong())
         plan = if (it.isRoute) RoutePlan(it.path.ifEmpty { it.points }, it.speedMph) else null
@@ -284,7 +284,7 @@ class MockService : Service() {
         added = MockSetup.providers.filter { p ->
             runCatching { MockSetup.addProvider(lm, p); true }.getOrElse { e ->
                 HubLog.w("Mock", "provider $p", e)
-                if (e is SecurityException) return fail("Android blocked mocking. Pick Contact Hub in Developer options → Select mock location app.")
+                if (e is SecurityException) return fail("Android blocked mocking. Pick Orbit in Developer options → Select mock location app.")
                 false
             }
         }

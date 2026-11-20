@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * Everything Contact Hub does when it's the phone's default texting app ("Contact Hub mode"):
+ * Everything Orbit does when it's the phone's default texting app ("Orbit mode"):
  * sending and receiving SMS and MMS itself and saving them to the phone's message database.
  * In this mode there's no RCS (Android only gives RCS to Google Messages).
  */

@@ -95,7 +95,7 @@ class MessagesAccessibility : AccessibilityService() {
     private fun removeView(v: android.view.View?) { if (v != null) runCatching { getSystemService(android.view.WindowManager::class.java).removeView(v) } }
 
     /**
-     * Snapshot: a screenshot of what you're looking at (Contact Hub, keyboard and all) laid over the
+     * Snapshot: a screenshot of what you're looking at (Orbit, keyboard and all) laid over the
      * whole screen, so Google Messages working underneath is invisible. Touches are absorbed.
      */
     private suspend fun showCover(): Boolean {
@@ -115,7 +115,7 @@ class MessagesAccessibility : AccessibilityService() {
         }.getOrElse { HubLog.w("Cover", "mirror failed", it); false }
     }
 
-    /** Pop-up worked: drop the full cover so Contact Hub is live, and only hide the little window. */
+    /** Pop-up worked: drop the full cover so Orbit is live, and only hide the little window. */
     private fun shrinkCoverTo(r: android.graphics.Rect) {
         val bmp = shot ?: return
         val crop = runCatching {
@@ -141,7 +141,7 @@ class MessagesAccessibility : AccessibilityService() {
         shot = null
         val v = cover ?: return
         cover = null
-        // Wait until Contact Hub is really back on screen underneath, then fade the cover away
+        // Wait until Orbit is really back on screen underneath, then fade the cover away
         val t0 = System.currentTimeMillis()
         while (System.currentTimeMillis() - t0 < 1500) {
             if (runCatching { rootInActiveWindow?.packageName == packageName }.getOrDefault(false)) break
@@ -275,7 +275,7 @@ class MessagesAccessibility : AccessibilityService() {
         try {
             openChat(pkg, addresses, body, media, popup = how == "popup")
             if (how == "popup") {
-                // Did Samsung open it as a small window? Then Contact Hub can stay live.
+                // Did Samsung open it as a small window? Then Orbit can stay live.
                 val t = System.currentTimeMillis()
                 while (System.currentTimeMillis() - t < 2500) {
                     val r = messagesBounds(pkg)
@@ -346,7 +346,7 @@ class MessagesAccessibility : AccessibilityService() {
         } finally {
             withContext(NonCancellable) {
                 if (popupOk) {
-                    // Close the little window; Contact Hub was never left
+                    // Close the little window; Orbit was never left
                     repeat(3) { if (runCatching { rootInActiveWindow?.packageName == pkg }.getOrDefault(false)) { performGlobalAction(GLOBAL_ACTION_BACK); delay(150) } }
                     hideCover()
                 } else { delay(if (covered) 120 else 350); backToHub(pkg); hideCover() }

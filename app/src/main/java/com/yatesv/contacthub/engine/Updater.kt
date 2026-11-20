@@ -25,7 +25,7 @@ object Updater {
     data class State(val latest: Int = 0, val available: Boolean = false, val progress: Float = -1f, val error: String = "")
     val state = MutableStateFlow(State())
 
-    /** Build number in the release title, e.g. "Contact Hub build #12" -> 12. */
+    /** Build number in the release title, e.g. "Orbit build #12" -> 12. */
     fun buildNumber(title: String): Int = Regex("#(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
     suspend fun check(force: Boolean = false): State = withContext(Dispatchers.IO) {
@@ -106,7 +106,7 @@ class InstallReceiver : BroadcastReceiver() {
                 runCatching { ctx.startActivity(confirm) }
                 val pi = PendingIntent.getActivity(ctx, 4322, confirm, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 val n = androidx.core.app.NotificationCompat.Builder(ctx, Notifier.CH_STATUS).setSmallIcon(com.yatesv.contacthub.R.drawable.ic_tile)
-                    .setContentTitle("Contact Hub update ready").setContentText("Tap to install").setContentIntent(pi).setAutoCancel(true).build()
+                    .setContentTitle("Orbit update ready").setContentText("Tap to install").setContentIntent(pi).setAutoCancel(true).build()
                 runCatching { androidx.core.app.NotificationManagerCompat.from(ctx).notify(7400, n) }
             }
             PackageInstaller.STATUS_SUCCESS -> HubLog.d("Update", "installed")

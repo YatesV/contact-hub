@@ -90,7 +90,7 @@ class MoreLogicTest {
     }
 
     @Test fun updateBuildNumber() {
-        assertEquals(12, Updater.buildNumber("Contact Hub build #12"))
+        assertEquals(12, Updater.buildNumber("Orbit build #12"))
         assertEquals(0, Updater.buildNumber("latest"))
     }
 

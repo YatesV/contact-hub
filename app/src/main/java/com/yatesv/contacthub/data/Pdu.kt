@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
 
 /**
- * Minimal MMS PDU reader/writer (OMA MMS encapsulation), only what Contact Hub needs as the
+ * Minimal MMS PDU reader/writer (OMA MMS encapsulation), only what Orbit needs as the
  * default texting app: build a send-req for group texts/photos, read notification-ind and
  * retrieve-conf for incoming MMS. Pure Kotlin so it can be unit tested.
  */

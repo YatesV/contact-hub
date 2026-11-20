@@ -39,9 +39,9 @@ import com.yatesv.contacthub.data.HubLog
 import kotlinx.coroutines.launch
 
 /**
- * Sign in to Life360 on Life360's own website, inside Contact Hub. When the site logs you in,
- * Contact Hub picks up the sign-in token the site uses, so there's nothing to copy or paste.
- * Your password goes only to Life360's page; Contact Hub never sees it.
+ * Sign in to Life360 on Life360's own website, inside Orbit. When the site logs you in,
+ * Orbit picks up the sign-in token the site uses, so there's nothing to copy or paste.
+ * Your password goes only to Life360's page; Orbit never sees it.
  */
 private const val HOOK = """
 (function(){

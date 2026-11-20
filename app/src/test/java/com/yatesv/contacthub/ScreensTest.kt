@@ -123,7 +123,7 @@ class ScreensTest {
 
     @Test fun setupWizardWalkthrough() {
         show { SetupWizard(first = true) }
-        rule.onNodeWithText("Welcome to Contact Hub").assertExists()
+        rule.onNodeWithText("Welcome to Orbit").assertExists()
         repeat(6) {
             val next = rule.onAllNodesWithText("Next").fetchSemanticsNodes().isNotEmpty()
             if (next) rule.onNodeWithText("Next").performClick()
@@ -134,7 +134,7 @@ class ScreensTest {
 
     @Test fun setupWizardContactHubMode() {
         show { SetupWizard(first = true) }
-        rule.onNodeWithText("Contact Hub mode").performClick()
+        rule.onNodeWithText("Orbit mode").performClick()
         rule.onNodeWithText("Next").performClick(); settle()
     }
 }

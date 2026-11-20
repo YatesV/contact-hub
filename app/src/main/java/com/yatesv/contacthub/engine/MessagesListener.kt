@@ -14,7 +14,7 @@ import com.yatesv.contacthub.replyHandle
 import kotlinx.coroutines.launch
 
 /**
- * Watches Google/Samsung Messages notifications. This is how Contact Hub:
+ * Watches Google/Samsung Messages notifications. This is how Orbit:
  *  - sees RCS messages (they aren't in the phone's SMS database),
  *  - gets the Messages app's reply button, so replies go out over RCS,
  *  - shows its own notifications instead of the Messages app's (optional),

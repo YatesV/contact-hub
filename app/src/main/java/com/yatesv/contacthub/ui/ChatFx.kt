@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.HorizontalDivider
@@ -105,6 +107,7 @@ fun IosMessageMenu(
     m: Msg, rect: Rect?, isStarred: Boolean, bubble: Color, bubbleText: Color,
     onDismiss: () -> Unit, onReact: (String) -> Unit, onStar: (Boolean) -> Unit, onCopy: (String) -> Unit,
     onSelect: () -> Unit = {}, onLink: (com.yatesv.contacthub.data.Links.Link) -> Unit = {},
+    extra: List<Pair<String, () -> Unit>> = emptyList(),
 ) {
     val links = remember(m.body) { com.yatesv.contacthub.data.Links.find(m.body).distinctBy { it.target }.take(2) }
     val appear = remember { Animatable(0f) }
@@ -122,7 +125,7 @@ fun IosMessageMenu(
             val screenW = with(density) { maxWidth.toPx() }
             val barH = with(density) { 56.dp.toPx() }
             val gap = with(density) { 10.dp.toPx() }
-            val menuH = with(density) { ((if (Otp.find(m.body) != null) 160.dp else 116.dp) + 45.dp * (links.size + if (m.body.isNotBlank()) 1 else 0)).toPx() }
+            val menuH = with(density) { ((if (Otp.find(m.body) != null) 160.dp else 116.dp) + 45.dp * (links.size + extra.size + if (m.body.isNotBlank()) 1 else 0)).toPx() }
             val r = rect ?: Rect(screenW * 0.2f, screenH * 0.4f, screenW * 0.8f, screenH * 0.4f + 120f)
             val bubbleH = r.height.coerceAtMost(screenH * 0.35f)
             // Shift everything so the reactions and the menu both fit on screen
@@ -171,6 +174,10 @@ fun IosMessageMenu(
                     }
                     MenuItem("Copy", Icons.Default.ContentCopy) { onCopy(m.body) }
                     if (m.body.isNotBlank()) { HorizontalDivider(); MenuItem("Select text", Icons.Default.TextFields) { onSelect() } }
+                    extra.forEach { (label, act) ->
+                        HorizontalDivider()
+                        MenuItem(label, when { label.contains("Pin", true) -> Icons.Default.PushPin; else -> Icons.Default.Translate }) { act() }
+                    }
                     Otp.find(m.body)?.let { code -> HorizontalDivider(); MenuItem("Copy code $code", Icons.Default.Key) { onCopy(code) } }
                     HorizontalDivider()
                     MenuItem(if (isStarred) "Unstar" else "Star", if (isStarred) Icons.Default.StarBorder else Icons.Default.Star) { onStar(!isStarred) }
@@ -209,7 +216,7 @@ private fun MenuItem(label: String, icon: ImageVector, onClick: () -> Unit) {
 
 /**
  * What the "live mirror" overlay shows while Google Messages sends: the same chat, still animating,
- * with your message filling in when it's sent. Drawn from Contact Hub's own copy of the chat.
+ * with your message filling in when it's sent. Drawn from Orbit's own copy of the chat.
  */
 @Composable
 fun ChatMirror(key: String) {

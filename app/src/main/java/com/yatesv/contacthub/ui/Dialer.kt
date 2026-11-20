@@ -67,7 +67,7 @@ fun DialerScreen() {
 
     Column(Modifier.fillMaxSize()) {
         Spacer(Modifier.height(36.dp))
-        if (!isDefault) Banner("Contact Hub isn't your default phone app yet, so it can't show its call screen or block numbers.", "Set default", {
+        if (!isDefault) Banner("Orbit isn't your default phone app yet, so it can't show its call screen or block numbers.", "Set default", {
             roleLauncher.launch(ctx.getSystemService(RoleManager::class.java).createRequestRoleIntent(RoleManager.ROLE_DIALER))
         }) {}
         PrimaryTabRow(tab) {
@@ -149,7 +149,7 @@ private fun RecentsTab() {
                     TextButton({ options = null; DialerState.number = c.number }) { Text("Edit number before calling") }
                     TextButton({
                         options = null
-                        if (!Hub.contacts.setBlocked(c.number, true)) Hub.banner.value = "Make Contact Hub your default phone app to block numbers."
+                        if (!Hub.contacts.setBlocked(c.number, true)) Hub.banner.value = "Make Orbit your default phone app to block numbers."
                     }) { Text("Block number") }
                 }
             },

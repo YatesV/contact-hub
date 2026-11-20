@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
@@ -233,6 +234,14 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                         Box {
                             IconButton({ menu = true }) { Icon(Icons.Default.MoreHoriz, "More") }
                             DropdownMenu(menu, { menu = false }) {
+                                DropdownMenuItem({ Text("Mark all as read") }, {
+                                    menu = false
+                                    val unread = rows.orEmpty().filter { it.unread }.map { it.key }
+                                    scope.launch {
+                                        unread.forEach { k -> runCatching { ActionReceiver.markRead(k); com.yatesv.contacthub.engine.Notifier.cancel(ctx, k) } }
+                                        Hub.banner.value = if (unread.isEmpty()) "Nothing unread" else "Marked ${unread.size} chat${if (unread.size == 1) "" else "s"} as read"
+                                    }
+                                }, leadingIcon = { Icon(androidx.compose.material.icons.Icons.Default.DoneAll, null) })
                                 DropdownMenuItem({ Text("Archived") }, { menu = false; Nav.go(Screen.Archived) }, leadingIcon = { Icon(Icons.Default.Archive, null) })
                                 DropdownMenuItem({ Text("Starred messages") }, { menu = false; Nav.go(Screen.Starred) }, leadingIcon = { Icon(Icons.Default.Star, null) })
                                 DropdownMenuItem({ Text("Scheduled") }, { menu = false; Nav.go(Screen.Scheduled) }, leadingIcon = { Icon(Icons.Default.Schedule, null) })

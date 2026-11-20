@@ -33,7 +33,7 @@ object Notifier {
         nm.createNotificationChannel(NotificationChannel(CH_CALLS, "Incoming calls", NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(null, null)
         })
-        nm.createNotificationChannel(NotificationChannel(CH_STATUS, "App status", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH_STATUS, "App status", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
     }
 
     /** A channel per contact with a custom sound. Android only allows the sound to be set when the channel is made. */
@@ -78,6 +78,9 @@ object Notifier {
             .setAutoCancel(true)
             .setContentIntent(openIntent(ctx, key))
             .setColor(s.accent)
+            // Feeds the unread number on the app icon badge
+            .setNumber(lines.count { it.first != "You" }.coerceAtLeast(1))
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
 
         if (hidden) {
             b.setContentTitle("New message").setContentText("Open Orbit to read it")

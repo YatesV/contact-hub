@@ -246,7 +246,9 @@ class MessagesAccessibility : AccessibilityService() {
             Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$to")).apply { if (!body.isNullOrEmpty()) putExtra("sms_body", body) }
         } else {
             Intent(if (media.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "image/*"
+                // The real type (voice notes, GIFs, contact cards, videos), so Google Messages attaches it properly
+                val types = media.map { contentResolver.getType(it) ?: "*/*" }.distinct()
+                type = types.singleOrNull() ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
                 putExtra("address", to)
                 if (!body.isNullOrEmpty()) { putExtra("sms_body", body); putExtra(Intent.EXTRA_TEXT, body) }
                 if (media.size == 1) putExtra(Intent.EXTRA_STREAM, media[0])

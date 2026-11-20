@@ -29,19 +29,45 @@ data class CallUi(
     val outgoing: Boolean,
     /** Carrier said the caller ID failed STIR/SHAKEN verification */
     val verificationFailed: Boolean = false,
+    /** People in a merged (conference) call */
+    val participants: List<String> = emptyList(),
+    /** The other call (on hold / waiting), if there are two */
+    val other: OtherCall? = null,
+    val canMerge: Boolean = false,
+    val canAddCall: Boolean = false,
+    /** Where the sound is going right now */
+    val route: AudioRoute.Kind = AudioRoute.Kind.PHONE,
 )
+
+data class OtherCall(val number: String, val state: Int, val participants: Int)
+
+/** A place call audio can go: the phone's earpiece, speaker, a Bluetooth device or a wired headset. */
+data class AudioRoute(val id: String, val label: String, val kind: Kind, val active: Boolean, internal val ref: Any? = null) {
+    enum class Kind { PHONE, SPEAKER, BLUETOOTH, WIRED, STREAMING }
+}
 
 /** Keeps track of the active call for the call screen. */
 object CallManager {
     val ui = MutableStateFlow<CallUi?>(null)
     /** All calls (call waiting can mean two). The screen shows [call]: the ringing one, else the active one. */
     private val calls = mutableListOf<Call>()
+    /** Calls shown as their own line (people inside a merged call are hidden behind the merged call) */
+    private val top: List<Call> get() = calls.filter { it.parent == null && it.state != Call.STATE_DISCONNECTED }
     private val call: Call? get() =
-        calls.firstOrNull { it.state == Call.STATE_RINGING } ?: calls.firstOrNull { it.state == Call.STATE_ACTIVE } ?: calls.lastOrNull()
+        top.firstOrNull { it.state == Call.STATE_RINGING } ?: top.firstOrNull { it.state == Call.STATE_ACTIVE } ?: top.lastOrNull() ?: calls.lastOrNull()
+
+    /** Every place the audio can go right now (for the audio picker on the call screen) */
+    val routes = MutableStateFlow<List<AudioRoute>>(emptyList())
+    internal var endpoints: List<Any> = emptyList()   // CallEndpoint on Android 14+
+    internal var endpoint: Any? = null
     internal var service: CallService? = null
 
     private val callback = object : Call.Callback() {
         override fun onStateChanged(c: Call, state: Int) { call?.let { publish(it) } }
+        override fun onChildrenChanged(c: Call, children: MutableList<Call>) { call?.let { publish(it) } }
+        override fun onParentChanged(c: Call, parent: Call?) { call?.let { publish(it) } }
+        override fun onConferenceableCallsChanged(c: Call, list: MutableList<Call>) { call?.let { publish(it) } }
+        override fun onDetailsChanged(c: Call, details: Call.Details) { call?.let { publish(it) } }
     }
 
     fun added(c: Call) {
@@ -59,15 +85,21 @@ object CallManager {
         c.unregisterCallback(callback)
         calls -= c
         val next = call
-        if (next == null) { ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) } } else publish(next)
+        if (next == null) {
+            ui.value = null; service?.let { NotificationManagerCompat.from(it).cancel(NOTIF_ID) }
+            service?.let { CallRecorder.stop(it) }
+        } else publish(next)
     }
 
     /** Number + time the current call connected (kept after the call screen clears, for the call note). */
     private var lastConnected: Pair<String, Long>? = null
 
+    private fun numberOf(c: Call) = c.details.handle?.schemeSpecificPart.orEmpty()
+
     private fun publish(c: Call) {
         val d = c.details
-        val number = d.handle?.schemeSpecificPart.orEmpty()
+        val kids = c.children.filter { it.state != Call.STATE_DISCONNECTED }.map { numberOf(it) }.filter { it.isNotBlank() }
+        val number = numberOf(c).ifBlank { kids.firstOrNull().orEmpty() }
         val st = c.state
         val prev = ui.value
         val audio = service?.callAudioState
@@ -82,7 +114,14 @@ object CallManager {
             onHold = st == Call.STATE_HOLDING,
             outgoing = d.callDirection == Call.Details.DIRECTION_OUTGOING,
             verificationFailed = android.os.Build.VERSION.SDK_INT >= 30 && d.callerNumberVerificationStatus == android.telecom.Connection.VERIFICATION_STATUS_FAILED,
+            participants = kids,
+            other = top.firstOrNull { it !== c }?.let { o -> OtherCall(numberOf(o).ifBlank { o.children.firstOrNull()?.let(::numberOf).orEmpty() }, o.state, o.children.size) },
+            canMerge = c.conferenceableCalls.isNotEmpty() || d.can(Call.Details.CAPABILITY_MERGE_CONFERENCE) ||
+                (top.size >= 2 && top.any { it.state == Call.STATE_HOLDING } && top.any { it.conferenceableCalls.isNotEmpty() }),
+            canAddCall = st == Call.STATE_ACTIVE && top.size < 2,
+            route = currentKind(),
         )
+        refreshRoutes()
         ui.value?.let { if (it.connectedAt > 0 && it.number.isNotBlank()) lastConnected = it.number to it.connectedAt }
         service?.let { svc -> if (st == Call.STATE_RINGING) showRinging(svc, number) else NotificationManagerCompat.from(svc).cancel(NOTIF_ID) }
         if (st == Call.STATE_DISCONNECTED && calls.none { it.state != Call.STATE_DISCONNECTED }) {
@@ -96,10 +135,118 @@ object CallManager {
     fun dtmf(c: Char) { call?.playDtmfTone(c); call?.stopDtmfTone() }
     fun setMuted(on: Boolean) { service?.setMuted(on); call?.let { publish(it) } }
     fun setSpeaker(on: Boolean) {
-        service?.setAudioRoute(if (on) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_WIRED_OR_EARPIECE)
+        if (!on) routes.value.firstOrNull { it.kind == AudioRoute.Kind.BLUETOOTH && it.active }?.let { return }
+        val target = routes.value.firstOrNull { it.kind == if (on) AudioRoute.Kind.SPEAKER else AudioRoute.Kind.PHONE }
+            ?: routes.value.firstOrNull { !on && it.kind == AudioRoute.Kind.WIRED }
+        if (target != null) selectRoute(target)
+        else service?.setAudioRoute(if (on) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_WIRED_OR_EARPIECE)
         call?.let { publish(it) }
     }
-    fun audioChanged() { call?.let { publish(it) } }
+    fun audioChanged() { call?.let { publish(it) } ?: refreshRoutes() }
+
+    // ---------------- Two calls: merge / swap ----------------
+
+    /** Joins the two calls into one (3-way). */
+    fun merge(): Boolean {
+        val active = top.firstOrNull { it.state == Call.STATE_ACTIVE } ?: call ?: return false
+        val other = active.conferenceableCalls.firstOrNull() ?: top.firstOrNull { it !== active && it in active.conferenceableCalls }
+        return runCatching {
+            when {
+                other != null -> active.conference(other)
+                active.details.can(Call.Details.CAPABILITY_MERGE_CONFERENCE) -> active.mergeConference()
+                else -> top.firstOrNull { it !== active }?.let { o -> o.conferenceableCalls.firstOrNull()?.let { o.conference(it) } ?: o.mergeConference() } ?: return false
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    /** Talk to the call that's on hold (the current one goes on hold). */
+    fun swap() {
+        val active = top.firstOrNull { it.state == Call.STATE_ACTIVE }
+        val held = top.firstOrNull { it.state == Call.STATE_HOLDING }
+        when {
+            active != null && active.details.can(Call.Details.CAPABILITY_SWAP_CONFERENCE) -> active.swapConference()
+            held != null -> held.unhold()   // Telecom puts the active one on hold
+            else -> active?.hold()
+        }
+    }
+
+    /** Hang up one person in a merged call. */
+    fun dropFromConference(number: String) {
+        call?.children?.firstOrNull { numberOf(it) == number }?.disconnect()
+    }
+
+    // ---------------- Audio routes (phone / speaker / Bluetooth / wired) ----------------
+
+    private fun currentKind(): AudioRoute.Kind {
+        if (android.os.Build.VERSION.SDK_INT >= 34) (endpoint as? android.telecom.CallEndpoint)?.let { return kindOf(it.endpointType) }
+        return when (service?.callAudioState?.route) {
+            CallAudioState.ROUTE_SPEAKER -> AudioRoute.Kind.SPEAKER
+            CallAudioState.ROUTE_BLUETOOTH -> AudioRoute.Kind.BLUETOOTH
+            CallAudioState.ROUTE_WIRED_HEADSET -> AudioRoute.Kind.WIRED
+            CallAudioState.ROUTE_STREAMING -> AudioRoute.Kind.STREAMING
+            else -> AudioRoute.Kind.PHONE
+        }
+    }
+
+    private fun kindOf(type: Int): AudioRoute.Kind = when (type) {
+        android.telecom.CallEndpoint.TYPE_SPEAKER -> AudioRoute.Kind.SPEAKER
+        android.telecom.CallEndpoint.TYPE_BLUETOOTH -> AudioRoute.Kind.BLUETOOTH
+        android.telecom.CallEndpoint.TYPE_WIRED_HEADSET -> AudioRoute.Kind.WIRED
+        android.telecom.CallEndpoint.TYPE_STREAMING -> AudioRoute.Kind.STREAMING
+        else -> AudioRoute.Kind.PHONE
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    fun refreshRoutes() {
+        val list = ArrayList<AudioRoute>()
+        if (android.os.Build.VERSION.SDK_INT >= 34 && endpoints.isNotEmpty()) {
+            val cur = endpoint as? android.telecom.CallEndpoint
+            endpoints.filterIsInstance<android.telecom.CallEndpoint>().forEach { e ->
+                val k = kindOf(e.endpointType)
+                list += AudioRoute(e.identifier.toString(), when (k) {
+                    AudioRoute.Kind.PHONE -> "Phone"; AudioRoute.Kind.SPEAKER -> "Speaker"; AudioRoute.Kind.WIRED -> "Wired headset"
+                    else -> e.endpointName.toString().ifBlank { if (k == AudioRoute.Kind.BLUETOOTH) "Bluetooth" else "Other device" }
+                }, k, cur?.identifier == e.identifier, e)
+            }
+        } else {
+            val a = service?.callAudioState
+            if (a != null) {
+                val mask = a.supportedRouteMask
+                if (mask and CallAudioState.ROUTE_EARPIECE != 0) list += AudioRoute("earpiece", "Phone", AudioRoute.Kind.PHONE, a.route == CallAudioState.ROUTE_EARPIECE)
+                if (mask and CallAudioState.ROUTE_WIRED_HEADSET != 0) list += AudioRoute("wired", "Wired headset", AudioRoute.Kind.WIRED, a.route == CallAudioState.ROUTE_WIRED_HEADSET)
+                if (mask and CallAudioState.ROUTE_SPEAKER != 0) list += AudioRoute("speaker", "Speaker", AudioRoute.Kind.SPEAKER, a.route == CallAudioState.ROUTE_SPEAKER)
+                if (mask and CallAudioState.ROUTE_BLUETOOTH != 0) {
+                    val devs = runCatching { a.supportedBluetoothDevices.toList() }.getOrDefault(emptyList())
+                    if (devs.isEmpty()) list += AudioRoute("bt", "Bluetooth", AudioRoute.Kind.BLUETOOTH, a.route == CallAudioState.ROUTE_BLUETOOTH)
+                    devs.forEach { d ->
+                        val nm = runCatching { d.alias ?: d.name }.getOrNull() ?: "Bluetooth device"
+                        list += AudioRoute("bt:" + d.address, nm, AudioRoute.Kind.BLUETOOTH,
+                            a.route == CallAudioState.ROUTE_BLUETOOTH && runCatching { a.activeBluetoothDevice?.address == d.address }.getOrDefault(devs.size == 1), d)
+                    }
+                }
+            }
+        }
+        routes.value = list
+    }
+
+    fun selectRoute(r: AudioRoute) {
+        val svc = service ?: return
+        if (android.os.Build.VERSION.SDK_INT >= 34 && r.ref is android.telecom.CallEndpoint) {
+            svc.requestCallEndpointChange(r.ref, svc.mainExecutor, object : android.os.OutcomeReceiver<Void, android.telecom.CallEndpointException> {
+                override fun onResult(result: Void?) {}
+                override fun onError(error: android.telecom.CallEndpointException) { Hub.banner.value = "Couldn't switch to ${r.label}" }
+            })
+            return
+        }
+        when (r.kind) {
+            AudioRoute.Kind.BLUETOOTH -> (r.ref as? android.bluetooth.BluetoothDevice)?.let { svc.requestBluetoothAudio(it) } ?: svc.setAudioRoute(CallAudioState.ROUTE_BLUETOOTH)
+            AudioRoute.Kind.SPEAKER -> svc.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
+            AudioRoute.Kind.WIRED -> svc.setAudioRoute(CallAudioState.ROUTE_WIRED_HEADSET)
+            AudioRoute.Kind.PHONE -> svc.setAudioRoute(CallAudioState.ROUTE_EARPIECE)
+            AudioRoute.Kind.STREAMING -> svc.setAudioRoute(CallAudioState.ROUTE_STREAMING)
+        }
+    }
 
     private const val NOTIF_ID = 4242
 
@@ -153,4 +300,12 @@ class CallService : InCallService() {
 
     override fun onCallRemoved(call: Call) { CallManager.removed(call) }
     override fun onCallAudioStateChanged(audioState: CallAudioState?) { CallManager.audioChanged() }
+
+    // Android 14+: the proper list of audio devices (each Bluetooth headset/car/earbud by name)
+    override fun onAvailableCallEndpointsChanged(availableEndpoints: MutableList<android.telecom.CallEndpoint>) {
+        CallManager.endpoints = availableEndpoints.toList(); CallManager.audioChanged()
+    }
+    override fun onCallEndpointChanged(callEndpoint: android.telecom.CallEndpoint) {
+        CallManager.endpoint = callEndpoint; CallManager.audioChanged()
+    }
 }

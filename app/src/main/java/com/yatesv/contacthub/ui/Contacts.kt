@@ -34,6 +34,8 @@ import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Battery4Bar
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cake
@@ -118,10 +120,25 @@ fun ContactsScreen() {
         .filter { groupMembers == null || Phone.norm(it.number) in groupMembers }
     val favorites = shown.filter { it.starred }
 
+    var cMenu by remember { mutableStateOf(false) }
+    var showQr by remember { mutableStateOf(false) }
+    var showDupes by remember { mutableStateOf(false) }
+    if (showQr) MyQrDialog { showQr = false }
+    if (showDupes) DuplicatesDialog { showDupes = false; Hub.changed() }
     val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = { androidx.compose.material3.LargeTopAppBar(title = { Text("Contacts") }, scrollBehavior = scroll,
+            actions = {
+                IconButton({ showQr = true }) { Icon(androidx.compose.material.icons.Icons.Default.QrCode2, "My contact QR code") }
+                androidx.compose.foundation.layout.Box {
+                    IconButton({ cMenu = true }) { Icon(androidx.compose.material.icons.Icons.Default.MoreVert, "More") }
+                    androidx.compose.material3.DropdownMenu(cMenu, { cMenu = false }) {
+                        androidx.compose.material3.DropdownMenuItem({ Text("Merge duplicates") }, { cMenu = false; showDupes = true })
+                        androidx.compose.material3.DropdownMenuItem({ Text("My QR code") }, { cMenu = false; showQr = true })
+                    }
+                }
+            },
             colors = androidx.compose.material3.TopAppBarDefaults.largeTopAppBarColors(containerColor = MaterialTheme.colorScheme.background,
                 scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.96f))) },
         floatingActionButton = {
@@ -341,6 +358,8 @@ fun ContactScreen(number: String) {
             SectionTitle("Shared photos & videos")
             if (media.isEmpty()) Text("Nothing shared yet", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else MediaGrid(media.map { it.second })
+
+            com.yatesv.contacthub.phone.CallRecordingsList(number)
 
             // Settings for this person
             SectionTitle("Options")

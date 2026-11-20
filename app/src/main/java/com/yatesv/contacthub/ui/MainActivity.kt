@@ -204,7 +204,7 @@ class MainActivity : FragmentActivity() {
 private fun Uri.getQueryParameterSafe(k: String): String? =
     runCatching { Uri.parse("x://y?" + schemeSpecificPart.substringAfter('?', "")).getQueryParameter(k) }.getOrNull()
 
-const val SETUP_VERSION = 2
+const val SETUP_VERSION = 3
 
 /** Lets photos fly between screens (shared element transitions). */
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)

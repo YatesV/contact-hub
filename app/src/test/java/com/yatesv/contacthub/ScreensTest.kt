@@ -124,18 +124,21 @@ class ScreensTest {
     @Test fun setupWizardWalkthrough() {
         show { SetupWizard(first = true) }
         rule.onNodeWithText("Welcome to Orbit").assertExists()
-        repeat(6) {
-            val next = rule.onAllNodesWithText("Next").fetchSemanticsNodes().isNotEmpty()
-            if (next) rule.onNodeWithText("Next").performClick()
-            else if (rule.onAllNodesWithText("Do this later").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithText("Do this later").performClick()
-            settle()
-        }
+        rule.onNodeWithText("Get started").performClick(); settle()
+        // Checklist: one big button for the next thing, and a way to move on
+        rule.onNodeWithText("Allow texts, contacts and calls").assertExists()
+        rule.onNodeWithText("Keep Orbit running").assertExists()
+        rule.onNodeWithText("Do the rest later").performClick(); settle()
+        rule.onNodeWithText("Connect your stuff").assertExists()
+        rule.onNodeWithText("Next").performClick(); settle()
+        rule.onNodeWithText("Start using Orbit").assertExists()
     }
 
-    @Test fun setupWizardContactHubMode() {
+    @Test fun setupWizardOrbitMode() {
         show { SetupWizard(first = true) }
         rule.onNodeWithText("Orbit mode").performClick()
-        rule.onNodeWithText("Next").performClick(); settle()
+        rule.onNodeWithText("Get started").performClick(); settle()
+        rule.onNodeWithText("Make Orbit your texting app").assertExists()
     }
 }
 

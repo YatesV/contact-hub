@@ -10,6 +10,7 @@ import android.location.Location
 import android.location.LocationManager
 import android.media.MediaRecorder
 import android.net.Uri
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Telephony
@@ -645,3 +646,37 @@ fun SelectionBar(count: Int, onClose: () -> Unit, onCopy: () -> Unit, onForward:
         }
     }
 }
+
+// ---------------- Keyboard GIFs / stickers ----------------
+
+/** Lets the chat box's TextFieldState be read and set like a plain String (`var text by FieldText(state)`). */
+class FieldText(private val state: androidx.compose.foundation.text.input.TextFieldState) {
+    operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): String = state.text.toString()
+    operator fun setValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>, value: String) {
+        if (state.text.toString() != value) state.setTextAndPlaceCursorAtEnd(value)
+    }
+}
+
+/**
+ * Copies media the keyboard handed over into Orbit's own files right away, while the keyboard's
+ * read permission is still valid, and returns Orbit's own URIs for sending. Text is left alone.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun keyboardMedia(ctx: Context, content: androidx.compose.foundation.content.TransferableContent): List<Uri> {
+    val clip = content.clipEntry.clipData
+    val out = ArrayList<Uri>()
+    for (i in 0 until clip.itemCount) {
+        val uri = clip.getItemAt(i).uri ?: continue
+        val mime = runCatching { ctx.contentResolver.getType(uri) }.getOrNull()
+            ?: clip.description.let { d -> (0 until d.mimeTypeCount).map { d.getMimeType(it) }.firstOrNull { !it.startsWith("text") } }
+        if (mime != null && !mime.startsWith("image") && !mime.startsWith("video")) continue
+        val f = if (mime?.startsWith("video") == true) copyVideo(ctx, uri) else copyIncoming(ctx, uri, mime)
+        if (f != null) out += OutFiles.uri(ctx, f)
+        else com.yatesv.contacthub.data.HubLog.w("Chat", "Couldn't read keyboard media $mime")
+    }
+    return out
+}
+
+private fun copyVideo(ctx: Context, uri: Uri): File? = runCatching {
+    OutFiles.new(ctx, "kb", "mp4").also { f -> ctx.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { i.copyTo(it) } } ?: error("can't read") }
+}.getOrNull()

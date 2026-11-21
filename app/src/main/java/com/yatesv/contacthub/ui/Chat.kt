@@ -10,6 +10,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.content.consume
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -180,7 +182,7 @@ object ChatData0 {
 private suspend fun com.yatesv.contacthub.data.HubDao.reactionsFlowOnce(key: String): List<Reaction> =
     allReactions().filter { it.convKey == key }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(key: String) {
     val ctx = LocalContext.current
@@ -196,7 +198,11 @@ fun ChatScreen(key: String) {
     var meta by remember { mutableStateOf(ConvMeta(key)) }
     var group by remember { mutableStateOf<GroupInfo?>(null) }
     var extras by remember { mutableStateOf(emptyMap<String, ContactExtra>()) }
-    var text by remember { mutableStateOf(Nav.drafts.remove(key).orEmpty()) }
+    // The chat box's text lives in a TextFieldState so keyboard GIFs/stickers can be received;
+    // `text` reads and writes it like a normal string everywhere else.
+    val field = remember { androidx.compose.foundation.text.input.TextFieldState(Nav.drafts.remove(key).orEmpty()) }
+    val fieldText = remember(field) { FieldText(field) }
+    var text: String by fieldText
     var menu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Msg?>(null) }
     /** Replying to this message (quote goes on top of what you send) */
@@ -605,16 +611,22 @@ fun ChatScreen(key: String) {
                             .background(MaterialTheme.colorScheme.background).heightIn(min = 40.dp, max = 160.dp),
                             verticalAlignment = Alignment.Bottom) {
                             androidx.compose.foundation.text.BasicTextField(
-                                text, { text = it },
-                                Modifier.weight(1f).padding(start = 14.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
-                                    .focusRequester(focus).onFocusChanged { if (it.isFocused) typing = true },
+                                state = field,
+                                modifier = Modifier.weight(1f).padding(start = 14.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
+                                    .focusRequester(focus).onFocusChanged { if (it.isFocused) typing = true }
+                                    // GIFs, stickers and images sent from the keyboard (Gboard, Samsung Keyboard)
+                                    .contentReceiver { content ->
+                                        val uris = keyboardMedia(ctx, content)
+                                        if (uris.isNotEmpty()) sendFiles(uris)
+                                        content.consume { it.uri != null }
+                                    },
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                     imeAction = if (settings.sendOnEnter) androidx.compose.ui.text.input.ImeAction.Send else androidx.compose.ui.text.input.ImeAction.Default,
                                     capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences),
-                                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { send() }),
-                                decorationBox = { inner ->
+                                onKeyboardAction = { default -> if (settings.sendOnEnter) send() else default() },
+                                decorator = { inner ->
                                     Box {
                                         if (text.isEmpty()) Text(if (chatType == "rcs") "RCS message" else "Text message",
                                             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)

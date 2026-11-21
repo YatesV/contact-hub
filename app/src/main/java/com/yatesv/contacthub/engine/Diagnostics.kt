@@ -243,6 +243,7 @@ object Diagnostics {
         check("Orbit", "App icon") { info(runCatching { com.yatesv.contacthub.ui.AppIcons.current(ctx) }.getOrDefault("?")) }
         check("Orbit", "Smart replies (on-device)") {
             if (!Hub.settings.value.smartReplies) info("Off")
+            else if (!Ai.smartReplyHealthy) fail("Turned itself off: it closed Orbit twice on this build. Comes back with the next update.")
             else {
                 val (r, ms) = timed { Ai.onDeviceReplies(listOf(com.yatesv.contacthub.data.Msg("t", "Are you coming to dinner tonight?", System.currentTimeMillis(), false, sender = "a"))).joinToString(" | ") }
                 if (r.isNotBlank()) pass("\"$r\" in $ms ms") else warn("No suggestions (Smart Reply only works in English)")

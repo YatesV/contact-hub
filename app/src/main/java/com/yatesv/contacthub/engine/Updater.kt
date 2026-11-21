@@ -31,6 +31,8 @@ object Updater {
         val error: String = "",
         val checking: Boolean = false,
         val checkedAt: Long = 0,
+        /** Friendly status (not an error), e.g. "Android's installer opened" */
+        val note: String = "",
     )
     val state = MutableStateFlow(State())
 
@@ -103,11 +105,40 @@ object Updater {
     fun allowInstallsIntent(ctx: Context) =
         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("updater", Context.MODE_PRIVATE)
+    private fun updateFile(ctx: Context) = java.io.File(ctx.cacheDir, "update/Orbit.apk")
+
+    /** Android 17 can refuse "self updates" for apps installed from a file. */
+    fun isSelfUpdateBlock(msg: String) = msg.contains("self update", true) || msg.contains("unknown source", true)
+
+    /**
+     * Opens the downloaded APK in Android's own installer screen (tap Install). Used when the phone blocks
+     * Orbit from installing its own update. Remembered, so later updates go straight here.
+     */
+    fun openSystemInstaller(ctx: Context): Boolean {
+        prefs(ctx).edit().putBoolean("systemInstaller", true).apply()
+        val f = updateFile(ctx)
+        if (!f.exists()) { state.value = state.value.copy(progress = -1f, error = "The update file is gone. Tap Update again."); return false }
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        val opened = runCatching { ctx.startActivity(view) }.isSuccess
+        // Android may not let it open from the background; a notification always works
+        val pi = PendingIntent.getActivity(ctx, 4323, view, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = androidx.core.app.NotificationCompat.Builder(ctx, Notifier.CH_STATUS).setSmallIcon(com.yatesv.contacthub.R.drawable.ic_tile)
+            .setContentTitle("Orbit update ready").setContentText("Tap to install").setContentIntent(pi).setAutoCancel(true).build()
+        runCatching { androidx.core.app.NotificationManagerCompat.from(ctx).notify(7600, n) }
+        state.value = state.value.copy(progress = -1f, error = "",
+            note = "Android's installer ${if (opened) "opened" else "is in your notifications"}. Tap Install to finish.")
+        HubLog.d("Update", "system installer ${if (opened) "opened" else "via notification"}")
+        return opened
+    }
+
     /** Downloads the newest APK and hands it to Android's installer (you confirm with one tap). */
     suspend fun install(ctx: Context) = withContext(Dispatchers.IO) {
         var sessionId = -1
         runCatching {
-            state.value = state.value.copy(progress = 0f, error = "")
+            state.value = state.value.copy(progress = 0f, error = "", note = "")
             var url = URL(APK)
             var conn: HttpURLConnection
             // Follow GitHub's redirects to the file
@@ -120,6 +151,26 @@ object Updater {
             if (conn.responseCode == 404) error("the new build is still being published. Try again in a minute.")
             if (conn.responseCode != 200) error("download returned ${conn.responseCode}")
             val total = conn.contentLengthLong
+            // Download to a file first, so it can also be handed to Android's own installer
+            val apk = updateFile(ctx).apply { parentFile?.mkdirs(); delete() }
+            apk.outputStream().use { out ->
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(64 * 1024)
+                    var done = 0L
+                    while (true) {
+                        val n = input.read(buf); if (n < 0) break
+                        out.write(buf, 0, n); done += n
+                        if (total > 0) state.value = state.value.copy(progress = done.toFloat() / total)
+                    }
+                }
+            }
+            if (total > 0 && apk.length() != total) error("download was cut off (${apk.length()} of $total bytes). Try again.")
+            if (prefs(ctx).getBoolean("systemInstaller", false)) {
+                // This phone blocks apps from installing their own updates: use Android's installer (one tap)
+                state.value = state.value.copy(progress = 1f)
+                openSystemInstaller(ctx)
+                return@runCatching
+            }
             val installer = ctx.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                 setAppPackageName(ctx.packageName)
@@ -128,16 +179,8 @@ object Updater {
             val id = installer.createSession(params)
             sessionId = id
             installer.openSession(id).use { session ->
-                session.openWrite("ContactHub.apk", 0, total).use { out ->
-                    conn.inputStream.use { input ->
-                        val buf = ByteArray(64 * 1024)
-                        var done = 0L
-                        while (true) {
-                            val n = input.read(buf); if (n < 0) break
-                            out.write(buf, 0, n); done += n
-                            if (total > 0) state.value = state.value.copy(progress = done.toFloat() / total)
-                        }
-                    }
+                session.openWrite("ContactHub.apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { it.copyTo(out, 64 * 1024) }
                     session.fsync(out)
                 }
                 val pi = PendingIntent.getBroadcast(ctx, 4321, Intent(ctx, InstallReceiver::class.java),
@@ -171,7 +214,8 @@ class InstallReceiver : BroadcastReceiver() {
             else -> {
                 val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
                 HubLog.w("Update", "install status: $msg")
-                Updater.state.value = Updater.state.value.copy(progress = -1f, error = "Install didn't finish: $msg")
+                if (Updater.isSelfUpdateBlock(msg)) Updater.openSystemInstaller(ctx) // Android 17 blocks self-updates: use its installer
+                else Updater.state.value = Updater.state.value.copy(progress = -1f, error = "Install didn't finish: $msg")
             }
         }
     }

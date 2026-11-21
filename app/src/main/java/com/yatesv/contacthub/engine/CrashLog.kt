@@ -226,6 +226,10 @@ object CrashLog {
                     raw != null && info.reason == ApplicationExitInfo.REASON_ANR -> { appendLine("FULL TECHNICAL TRACE"); appendLine(String(raw).take(14_000)) }
                 }
             }
+            if (tomb != null) dir(ctx).listFiles().orEmpty().filter {
+                it.name.startsWith("crash-") && kotlin.math.abs(it.lastModified() - info.timestamp) < 5_000 &&
+                    runCatching { it.readText().contains("no details were saved") }.getOrDefault(false)
+            }.forEach { it.delete() }
             val f = File(dir(ctx), "$kind-${info.timestamp}.txt")
             // Only this importer writes these files: replace older, less readable versions of the same record
             f.writeText(text); f.setLastModified(info.timestamp)

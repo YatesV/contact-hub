@@ -60,7 +60,19 @@ class MessagesListener : NotificationListenerService() {
             val dao = Hub.db.dao()
             for (m in incoming) {
                 val text = m.text?.toString().orEmpty()
+                // A photo/video/file in the notification: copy it now (the link stops working once the notification is gone)
+                val file = m.dataUri?.let { com.yatesv.contacthub.data.IncomingMedia.copy(this@MessagesListener, it, m.dataMimeType) }
+                if (file != null) {
+                    val body = if (com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(text)) "" else text
+                    val id = dao.addLocal(LocalMessage(convKey = key, body = body, date = m.timestamp, outgoing = false,
+                        sender = m.person?.name?.toString().orEmpty(), source = "rcs"))
+                    Hub.orbit.setFiles("l:$id", listOf(file.first.absolutePath to file.second))
+                    HubLog.d("Listener", "saved attachment ${file.second} (${file.first.length() / 1024} KB)")
+                    continue
+                }
                 if (text.isBlank()) continue
+                if (m.dataMimeType != null || com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(text))
+                    HubLog.d("Listener", "attachment without a readable file (mime=${m.dataMimeType}, uri=${m.dataUri != null})")
                 val parsed = if (s.convertReactions) Reactions.parse(text) else null
                 if (parsed != null) {
                     // Saved against the quoted text; the chat screen attaches it to the right bubble
@@ -75,6 +87,16 @@ class MessagesListener : NotificationListenerService() {
             }
             Hub.changed()
 
+            // Swap Google Messages' notification for Orbit's, only after any files were copied
+            // (hiding it first can take away Orbit's access to the photo)
+            if (s.handleNotifications && incoming.isNotEmpty()) {
+                runCatching { cancelNotification(sbn.key) }
+                if (Hub.openConv != key) Notifier.showMessage(this@MessagesListener, key, title, isGroup,
+                    msgs.takeLast(6).map { (it.person?.name?.toString() ?: "You") to (it.text?.toString().orEmpty()) }
+                        .filter { !Sender.isReactionText(it.second) },
+                    mention = isGroup && s.myName.isNotBlank() && incoming.any { it.text?.toString()?.contains(s.myName, ignoreCase = true) == true })
+            }
+
             // Auto-reply: plain text, no branding, at most once every 15 minutes per chat
             if (s.autoReplyOn && incoming.isNotEmpty() && !isGroup) {
                 val last = prefs.getLong("auto:$key", 0)
@@ -85,15 +107,6 @@ class MessagesListener : NotificationListenerService() {
             }
         }
 
-        if (s.handleNotifications && incoming.isNotEmpty()) {
-            runCatching { cancelNotification(sbn.key) }
-            if (Hub.openConv != key) Hub.scope.launch {
-                Notifier.showMessage(this@MessagesListener, key, title, isGroup,
-                    msgs.takeLast(6).map { (it.person?.name?.toString() ?: "You") to (it.text?.toString().orEmpty()) }
-                        .filter { !Sender.isReactionText(it.second) },
-                    mention = isGroup && s.myName.isNotBlank() && incoming.any { it.text?.toString()?.contains(s.myName, ignoreCase = true) == true })
-            }
-        }
     }
     }
 

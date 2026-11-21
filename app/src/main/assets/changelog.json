@@ -3,6 +3,22 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-20T21:20",
+      "title": "Attachments, Smart Reply crash fix, updates on Android 17",
+      "notes": [
+        "Photos, videos and files people send over RCS now show in the chat instead of just \"Attachment\"",
+        "Tap any picture or file to open it full screen; long-press → Save to phone (Pictures, Movies or Download → Orbit folder)",
+        "If a file can't be pulled in, the bubble says what it is and opens that chat in Google Messages to see or download it",
+        "Picture texts open in your gallery app reliably (they used to fail with some viewers)",
+        "Fixed: Orbit closing while you were in a chat or got a text, caused by Google's Smart Reply (reply suggestions)",
+        "Smart Reply now uses one engine for the whole app and runs one suggestion at a time",
+        "Safety net: if Smart Reply ever closes Orbit twice on the same build, it turns itself off until the next update",
+        "Crash reports name the exact library that crashed, and old duplicate \"no details\" reports are removed",
+        "Fixed: \"Self update is blocked by unknown source package\" on Android 17. Orbit now hands the update to Android's installer (tap Install), and remembers to do that next time"
+      ]
+    },
+    {
+      "build": 27,
       "date": "2026-11-20T20:45",
       "title": "Update history",
       "notes": [

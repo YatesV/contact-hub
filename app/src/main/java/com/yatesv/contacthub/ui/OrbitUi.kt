@@ -156,7 +156,10 @@ fun AiPage() {
     var provider by remember { mutableStateOf(if (s.aiProvider == "off") "xai" else s.aiProvider) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    SwitchRow("Smart replies", "Reply suggestions above the keyboard and in notifications (also on your watch)", s.smartReplies) { v -> Hub.settings.update { it.copy(smartReplies = v) } }
+    SwitchRow("Smart replies", "Reply suggestions above the keyboard and in notifications (also on your watch)", s.smartReplies) { v ->
+        if (v) com.yatesv.contacthub.engine.Ai.resetSmartReply()   // give the on-device engine another chance when turned back on
+        Hub.settings.update { it.copy(smartReplies = v) }
+    }
     SwitchRow("Birthday reminders", "A notification at 9 AM with a one-tap birthday text", s.birthdayReminders) { v -> Hub.settings.update { it.copy(birthdayReminders = v) } }
     ChoiceRow("Translate messages into", listOf("" to "Phone language", "en" to "English", "es" to "Spanish", "fr" to "French", "de" to "German", "pt" to "Portuguese", "vi" to "Vietnamese", "zh" to "Chinese"),
         s.translateTo) { v -> Hub.settings.update { it.copy(translateTo = v) } }

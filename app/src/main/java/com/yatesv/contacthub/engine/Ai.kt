@@ -130,28 +130,29 @@ object Ai {
 
     /**
      * Crash guard: a marker is written right before each prediction and removed after. If Orbit starts and the
-     * marker is still there, the last prediction closed the app. After 2 of those on the same build,
-     * on-device Smart Reply turns itself off until the next update (AI-key replies still work).
+     * marker is still there, the last prediction closed the app. On-device Smart Reply crashes deep inside
+     * Google's own ML Kit library (nothing we can patch) on some phones, so the FIRST such crash turns it off
+     * for good — it stays off across updates until you switch it back on. AI-key replies are unaffected.
      */
     private val smartReplyCheckedOnce by lazy {
         runCatching {
             val p = srPrefs()
-            val build = com.yatesv.contacthub.BuildConfig.VERSION_CODE
             if (p.contains("inflight")) {
-                val n = if (p.getInt("crashBuild", 0) == build) p.getInt("crashes", 0) + 1 else 1
-                p.edit().remove("inflight").putInt("crashBuild", build).putInt("crashes", n).commit()
-                HubLog.w("Ai", "Smart Reply closed Orbit last time ($n on build $build)")
+                p.edit().remove("inflight").putBoolean("broken", true).commit()
+                HubLog.w("Ai", "Smart Reply closed Orbit; turning on-device Smart Reply off for good")
             }
         }
         true
     }
 
-    /** False if Smart Reply crashed Orbit twice on this build (it turns back on with the next update). */
+    /** False once on-device Smart Reply has crashed the app (stays off until re-enabled in settings). */
     val smartReplyHealthy: Boolean get() {
         smartReplyCheckedOnce
-        val p = srPrefs()
-        return !(p.getInt("crashBuild", 0) == com.yatesv.contacthub.BuildConfig.VERSION_CODE && p.getInt("crashes", 0) >= 2)
+        return !srPrefs().getBoolean("broken", false)
     }
+
+    /** Called when the user switches Smart Reply back on, to give the on-device engine another try. */
+    fun resetSmartReply() { srPrefs().edit().remove("broken").apply() }
 
     /** Google's on-device Smart Reply (English only, nothing leaves the phone). */
     suspend fun onDeviceReplies(recent: List<Msg>): List<String> {

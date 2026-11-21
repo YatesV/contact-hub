@@ -56,12 +56,26 @@ class MessagesListener : NotificationListenerService() {
 
         val s = Hub.settings.value
         val incoming = newOnes.filter { it.person != null && it.person?.name != style.user.name }
+        // Google Messages often doesn't put the RCS file in the notification, but does include the photo as the
+        // notification's big-picture preview. Grab that as a fallback so photo messages show the real image.
+        val bigPicture = runCatching {
+            @Suppress("DEPRECATION")
+            n.extras.getParcelable(android.app.Notification.EXTRA_PICTURE) as? android.graphics.Bitmap
+        }.getOrNull()
+        var pictureUsed = false
+        HubLog.d("Listener", "media sources: bigPicture=${bigPicture != null} msgsWithFile=${incoming.count { it.dataUri != null }}")
         Hub.scope.launch {
             val dao = Hub.db.dao()
             for (m in incoming) {
                 val text = m.text?.toString().orEmpty()
+                val looksLikeMedia = m.dataMimeType != null || com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(text)
                 // A photo/video/file in the notification: copy it now (the link stops working once the notification is gone)
-                val file = m.dataUri?.let { com.yatesv.contacthub.data.IncomingMedia.copy(this@MessagesListener, it, m.dataMimeType) }
+                var file = m.dataUri?.let { com.yatesv.contacthub.data.IncomingMedia.copy(this@MessagesListener, it, m.dataMimeType) }
+                // No file given, but the notification carries a photo preview: use that
+                if (file == null && !pictureUsed && bigPicture != null && looksLikeMedia) {
+                    file = com.yatesv.contacthub.data.IncomingMedia.saveBitmap(this@MessagesListener, bigPicture)
+                    if (file != null) pictureUsed = true
+                }
                 if (file != null) {
                     val body = if (com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(text)) "" else text
                     val id = dao.addLocal(LocalMessage(convKey = key, body = body, date = m.timestamp, outgoing = false,
@@ -71,8 +85,8 @@ class MessagesListener : NotificationListenerService() {
                     continue
                 }
                 if (text.isBlank()) continue
-                if (m.dataMimeType != null || com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(text))
-                    HubLog.d("Listener", "attachment without a readable file (mime=${m.dataMimeType}, uri=${m.dataUri != null})")
+                if (looksLikeMedia)
+                    HubLog.d("Listener", "attachment Orbit couldn't pull in (mime=${m.dataMimeType}, uri=${m.dataUri != null}, picture=${bigPicture != null})")
                 val parsed = if (s.convertReactions) Reactions.parse(text) else null
                 if (parsed != null) {
                     // Saved against the quoted text; the chat screen attaches it to the right bubble

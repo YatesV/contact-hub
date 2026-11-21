@@ -431,7 +431,8 @@ fun ChatScreen(key: String) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = settings.wallpaperDim)))
             }
             val iosMenu = selected != null && settings.menuStyle == "ios"
-            Column(Modifier.fillMaxSize().imePadding().then(if (iosMenu) Modifier.blur(14.dp) else Modifier)) {
+            // The chat recedes behind the lifted bubble with an animated depth-blur, matching the Fold transition
+            Column(Modifier.fillMaxSize().imePadding().recedeBehind(iosMenu, settings.foldIntensity)) {
                 val real = data?.msgs.orEmpty()
                 // Your queued messages show faded (or red if they failed) until the real one appears
                 val waiting = queue.filter { q -> q.key == key && real.none { it.outgoing && it.body.trim() == q.body && it.date >= q.created - 60_000 } }

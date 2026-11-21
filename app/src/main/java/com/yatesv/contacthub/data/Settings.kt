@@ -90,7 +90,7 @@ data class Settings(
     val springStiffness: Float = 380f,
     val transition: String = "fold",         // fold, slide, fade, zoom
     /** Fold transition strength, 0 = subtle, 1 = dramatic. */
-    val foldIntensity: Float = 0.35f,
+    val foldIntensity: Float = 0.85f,
     val menuStyle: String = "ios",          // ios, sheet
     val haptics: Boolean = true,
     val screenEffects: Boolean = false,
@@ -183,6 +183,8 @@ class SettingsStore(ctx: Context) {
         if (s.designVersion < 1) s = s.copy(designVersion = 1, preset = if (s.preset == "google" && s.sentColor == 0 && s.recvColor == 0) "hub" else s.preset)
         // One-time move to the new Fold transition for anyone still on the old default slide
         if (s.designVersion < 2) s = s.copy(designVersion = 2, transition = if (s.transition == "slide") "fold" else s.transition)
+        // Fold is now dramatic by default; bump anyone still on the old subtle default
+        if (s.designVersion < 3) s = s.copy(designVersion = 3, foldIntensity = if (s.foldIntensity == 0.35f) 0.85f else s.foldIntensity)
         s
     })
     val flow: StateFlow<Settings> = _flow

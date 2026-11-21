@@ -3,6 +3,16 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-20T23:15",
+      "title": "Call recordings in Settings",
+      "notes": [
+        "New: Settings → Call recordings shows exactly where recordings are saved on your phone",
+        "Play, share or delete any recording right there",
+        "Save to phone copies a recording into your Music folder, where other apps can find it"
+      ]
+    },
+    {
+      "build": 35,
       "date": "2026-11-20T22:40",
       "title": "Dramatic fold + more blur (Phase 3)",
       "notes": [

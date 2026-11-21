@@ -3,6 +3,18 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-20T22:10",
+      "title": "Faster everywhere (Phase 1 of the speed + animation overhaul)",
+      "notes": [
+        "Sending: your message confirms as sent noticeably quicker (the send loop reacts as soon as it can instead of in fixed steps)",
+        "Opening chats: the chats you're most likely to open are warmed up in the background and the one you tap is loaded the instant you tap it, so it opens instantly",
+        "Scrolling: chat bubbles do less repeated work while you scroll",
+        "Startup: the app opens faster — the slow setup work now happens just after launch instead of blocking the first screen",
+        "Next up: the iPhone Duo-style fold transition and smoother animations everywhere"
+      ]
+    },
+    {
+      "build": 29,
       "date": "2026-11-20T21:20",
       "title": "Attachments, Smart Reply crash fix, updates on Android 17",
       "notes": [

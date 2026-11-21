@@ -14,7 +14,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
@@ -207,5 +214,73 @@ fun CallRecordingsList(number: String) {
                 IconButton({ if (playing == r.file) stopPlaying(); r.file.delete(); version++ }) { Icon(Icons.Default.Delete, "Delete") }
             }
         }
+    }
+}
+
+/** Settings → Call recordings: where they're saved, and every recording to play, save, share or delete. */
+@androidx.compose.runtime.Composable
+fun CallRecordingsPage() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val recording by CallRecorder.startedAt.collectAsState()
+    var version by remember { mutableStateOf(0) }
+    val items = remember(recording, version) { CallRecorder.list(ctx) }
+    var playing by remember { mutableStateOf<File?>(null) }
+    val player = remember { mutableStateOf<MediaPlayer?>(null) }
+    DisposableEffect(Unit) { onDispose { runCatching { player.value?.release() } } }
+    fun stopPlaying() { runCatching { player.value?.release() }; player.value = null; playing = null }
+    val fmt = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        Text("Where they're saved", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
+        Text(CallRecorder.dir(ctx).absolutePath, style = MaterialTheme.typography.bodySmall,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp))
+        Text("They stay inside Orbit — not in your gallery — and are deleted if you uninstall Orbit. Use Save to phone to copy one into your Music folder, where other apps can find it. Recording only hears the other person clearly with speaker on.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp))
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+
+        if (items.isEmpty()) {
+            Text("No recordings yet.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else items.forEach { r ->
+            val name = Hub.contacts.cached(r.number)?.name ?: Phone.pretty(r.number)
+            Row(Modifier.fillMaxWidth().clickable {
+                if (playing == r.file) stopPlaying()
+                else {
+                    stopPlaying()
+                    runCatching {
+                        player.value = MediaPlayer().apply { setDataSource(r.file.absolutePath); setOnCompletionListener { stopPlaying() }; prepare(); start() }
+                        playing = r.file
+                    }.onFailure { Hub.banner.value = "Couldn't play that recording" }
+                }
+            }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (playing == r.file) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(name)
+                    Text("${fmt.format(Date(r.date))} · %.1f MB".format(r.file.length() / 1_048_576.0),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton({
+                    scope.launch {
+                        val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.yatesv.contacthub.data.IncomingMedia.saveToPhone(ctx,
+                                com.yatesv.contacthub.data.Attachment(com.yatesv.contacthub.data.IncomingMedia.uri(ctx, r.file), "audio/mp4"))
+                        }
+                        Hub.banner.value = if (saved != null) "Saved to $saved" else "Couldn't save it"
+                    }
+                }) { Icon(androidx.compose.material.icons.Icons.Default.Download, "Save to phone") }
+                IconButton({
+                    runCatching {
+                        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", r.file)
+                        ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("audio/mp4").putExtra(Intent.EXTRA_STREAM, uri)
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share recording").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }.onFailure { Hub.banner.value = "Couldn't share it" }
+                }) { Icon(Icons.Default.Share, "Share") }
+                IconButton({ if (playing == r.file) stopPlaying(); r.file.delete(); version++ }) { Icon(Icons.Default.Delete, "Delete") }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }

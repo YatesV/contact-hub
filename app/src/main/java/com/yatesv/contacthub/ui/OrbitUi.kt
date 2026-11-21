@@ -640,12 +640,41 @@ fun ReportsPage() {
     var open by remember { mutableStateOf<com.yatesv.contacthub.engine.CrashLog.Report?>(null) }
     LaunchedEffect(ver) { list = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yatesv.contacthub.engine.CrashLog.all(ctx) } }
     val fmt = remember { java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault()) }
+    val scope = rememberCoroutineScope()
+    var confirmClear by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         val l = list
         when {
             l == null -> {}
             l.isEmpty() -> Text("No crashes or bugs recorded. 🎉", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> {
+                // Copy / share / clear every report at once
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.FilledTonalButton({
+                        scope.launch {
+                            val all = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yatesv.contacthub.engine.CrashLog.allText(ctx, 200_000) }
+                            runCatching {
+                                ctx.getSystemService(android.content.ClipboardManager::class.java)
+                                    .setPrimaryClip(android.content.ClipData.newPlainText("Orbit reports", all))
+                                Hub.banner.value = "Copied ${l.size} report${if (l.size == 1) "" else "s"}"
+                            }.onFailure { Hub.banner.value = "Too big to copy. Use Share all instead." }
+                        }
+                    }, Modifier.weight(1f)) { Text("Copy all") }
+                    androidx.compose.material3.OutlinedButton({
+                        scope.launch {
+                            val f = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                OutFiles.new(ctx, "orbit-reports", "txt").also { it.writeText(com.yatesv.contacthub.engine.CrashLog.allText(ctx, 2_000_000)) }
+                            }
+                            runCatching {
+                                ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                                    .putExtra(Intent.EXTRA_STREAM, OutFiles.uri(ctx, f)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share all reports")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }
+                    }, Modifier.weight(1f)) { Text("Share all") }
+                    androidx.compose.material3.OutlinedButton({ confirmClear = true }, Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Clear all") }
+                }
                 l.forEach { r ->
                     Column(Modifier.fillMaxWidth().clickable { open = r }.padding(horizontal = 20.dp, vertical = 12.dp)) {
                         Text(when (r.kind) { "crash" -> "💥 Crash"; "freeze" -> "🧊 Freeze"; else -> "🐞 Bug (kept running)" } + " · " + fmt.format(java.util.Date(r.at)),
@@ -653,9 +682,16 @@ fun ReportsPage() {
                         Text(r.why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
                     }
                 }
-                TextButton({ com.yatesv.contacthub.engine.CrashLog.clear(ctx) }, Modifier.padding(12.dp)) { Text("Clear all reports", color = MaterialTheme.colorScheme.error) }
             }
         }
     }
     open?.let { r -> ReportDialog(r, onClose = { open = null }) }
+    if (confirmClear) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        title = { Text("Clear all reports?") },
+        text = { Text("This deletes all ${list?.size ?: 0} crash and bug reports. It can't be undone.") },
+        confirmButton = { TextButton({ confirmClear = false; com.yatesv.contacthub.engine.CrashLog.clear(ctx); Hub.banner.value = "Reports cleared" }) {
+            Text("Clear all", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } },
+    )
 }

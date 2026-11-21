@@ -41,6 +41,15 @@ object CrashLog {
             runCatching {
                 save(ctx, "crash", build(ctx, crashed = true, where = "Thread \"${t.name}\"", e = e))
                 HubLog.w("Crash", "uncaught on ${t.name}", e)
+            }.onFailure {
+                // Building the full report failed (often out of memory): save the bare minimum instead
+                runCatching {
+                    File(dir(ctx), "crash-${System.currentTimeMillis()}.txt").writeText(
+                        "ORBIT CRASH REPORT — Orbit closed\nWhen: ${runCatching { stamp(System.currentTimeMillis()) }.getOrDefault("now")}\nBuild: ${BuildConfig.VERSION_CODE}\nWhere: Thread \"${t.name}\"\n\n" +
+                        "WHY IT HAPPENED\n${if (e is OutOfMemoryError) "Orbit ran out of memory." else "Unexpected error (${e.javaClass.simpleName})."} The full report couldn't be built.\n" +
+                        "Error: ${e.javaClass.name}: ${e.message?.take(300)}\n\nFULL TECHNICAL TRACE\n" +
+                        e.stackTrace.take(60).joinToString("\n") { "    at $it" })
+                }
             }
             previous?.uncaughtException(t, e)
         }
@@ -178,20 +187,25 @@ object CrashLog {
      */
     private fun importSystemRecord(ctx: Context) = runCatching {
         val p = prefs(ctx)
-        val after = p.getLong("sysImported", 0)
+        // V2: native crashes are now decoded into readable text, so read Android's records again once
+        val after = p.getLong("sysImportedV2", 0)
         val am = ctx.getSystemService(ActivityManager::class.java)
         val bad = setOf(ApplicationExitInfo.REASON_CRASH, ApplicationExitInfo.REASON_CRASH_NATIVE, ApplicationExitInfo.REASON_ANR)
         val infos = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 10).filter { it.reason in bad && it.timestamp > after }
         if (infos.isEmpty()) return@runCatching
-        p.edit().putLong("sysImported", infos.maxOf { it.timestamp }).apply()
+        p.edit().putLong("sysImportedV2", infos.maxOf { it.timestamp }).apply()
         val ours = dir(ctx).listFiles().orEmpty().filter { it.name.startsWith("crash-") }.map { it.lastModified() }
         for (info in infos.sortedBy { it.timestamp }) {
             // Our own handler already wrote this one (within a few seconds)
             if (info.reason == ApplicationExitInfo.REASON_CRASH && ours.any { kotlin.math.abs(it - info.timestamp) < 15_000 }) continue
+            val raw = runCatching { info.traceInputStream?.use { it.readBytes() } }.getOrNull()
+            val tomb = if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && raw != null) Tombstone.parse(raw) else null
             val (kind, why) = when (info.reason) {
                 ApplicationExitInfo.REASON_ANR -> "freeze" to "Orbit stopped responding: the screen's thread was busy for more than 5 seconds, so Android offered to close it."
-                ApplicationExitInfo.REASON_CRASH_NATIVE -> "crash" to "Crash inside native code (a built-in library such as the map, ML Kit, or Android itself), not Orbit's own Kotlin code."
-                else -> "crash" to "Orbit closed, but no details were saved. That happens on versions from before crash reports were added (build 17)."
+                ApplicationExitInfo.REASON_CRASH_NATIVE -> "crash" to ("Crash inside native code, not Orbit's own Kotlin code. " +
+                    (tomb?.let { Tombstone.explain(it) } ?: "Android didn't include readable details."))
+                else -> "crash" to "Orbit closed from a Java error before its crash reporter could save it (very early while starting, or while out of memory). " +
+                    "Android only recorded that it crashed."
             }
             val text = buildString {
                 appendLine(if (kind == "freeze") "ORBIT FREEZE REPORT" else "ORBIT CRASH REPORT — Orbit closed")
@@ -203,11 +217,40 @@ object CrashLog {
                 appendLine(why)
                 info.description?.takeIf { it.isNotBlank() }?.let { appendLine("Android says: $it") }
                 appendLine()
-                runCatching { info.traceInputStream?.bufferedReader()?.use { appendLine("FULL TECHNICAL TRACE"); appendLine(it.readText().take(14_000)) } }
+                appendLine("WHAT ORBIT WAS DOING JUST BEFORE")
+                HubLog.snapshot().filter { line -> logTime(line)?.let { it in (info.timestamp - 120_000)..info.timestamp } ?: false }
+                    .takeLast(40).ifEmpty { listOf("(nothing logged in the 2 minutes before)") }.forEach { appendLine(it) }
+                appendLine()
+                when {
+                    tomb != null -> { appendLine("FULL TECHNICAL TRACE"); append(Tombstone.render(tomb).take(14_000)) }
+                    raw != null && info.reason == ApplicationExitInfo.REASON_ANR -> { appendLine("FULL TECHNICAL TRACE"); appendLine(String(raw).take(14_000)) }
+                }
             }
             val f = File(dir(ctx), "$kind-${info.timestamp}.txt")
-            if (!f.exists()) { f.writeText(text); f.setLastModified(info.timestamp) }
+            // Only this importer writes these files: replace older, less readable versions of the same record
+            f.writeText(text); f.setLastModified(info.timestamp)
         }
+    }
+
+    /** HubLog lines start with "MM-dd HH:mm:ss"; returns that time this year, or null. */
+    private fun logTime(line: String): Long? = runCatching {
+        val m = Regex("""^(\d{2}-\d{2} \d{2}:\d{2}:\d{2})""").find(line) ?: return null
+        val cal = java.util.Calendar.getInstance()
+        val d = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).parse(m.value) ?: return null
+        val c2 = java.util.Calendar.getInstance().apply { time = d; set(java.util.Calendar.YEAR, cal.get(java.util.Calendar.YEAR)) }
+        c2.timeInMillis
+    }.getOrNull()
+
+    /** All reports joined into one text, newest first, capped so it fits on the clipboard. */
+    fun allText(ctx: Context, cap: Int = 400_000): String {
+        val list = all(ctx)
+        val sb = StringBuilder("ORBIT — ${list.size} report${if (list.size == 1) "" else "s"} (build ${BuildConfig.VERSION_CODE})\n\n")
+        for ((i, r) in list.withIndex()) {
+            val block = "===== ${i + 1} of ${list.size} =====\n${r.text.trimEnd()}\n\n"
+            if (sb.length + block.length > cap) { sb.append("(${list.size - i} older report(s) left out to fit)\n"); break }
+            sb.append(block)
+        }
+        return sb.toString()
     }
 
     // ---------------- Telling you ----------------

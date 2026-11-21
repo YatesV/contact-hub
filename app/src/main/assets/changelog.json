@@ -3,6 +3,16 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-20T22:40",
+      "title": "Dramatic fold + more blur (Phase 3)",
+      "notes": [
+        "The Fold transition is now dramatic by default — a bigger 3D tilt and a deeper blur as screens fold in and out (still adjustable with the Fold intensity slider)",
+        "More blur throughout: the chat eases back behind the long-press menu, and the inbox blurs back behind its action menus, so what you tapped feels lifted in front",
+        "The blur everywhere follows your Fold intensity slider"
+      ]
+    },
+    {
+      "build": 33,
       "date": "2026-11-20T22:30",
       "title": "The Fold transition (Phase 2)",
       "notes": [

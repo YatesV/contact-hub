@@ -8,6 +8,7 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +17,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.util.lerp
@@ -47,9 +50,9 @@ data class FoldFrame(
 fun foldFrame(p: Float, forward: Boolean, entering: Boolean, intensity: Float): FoldFrame {
     val i = intensity.coerceIn(0f, 1f)
     val c = p.coerceIn(0f, 1f)
-    val maxAngle = lerp(7f, 24f, i)
-    val maxBlur = lerp(3f, 22f, i)
-    val depth = lerp(0.05f, 0.16f, i)
+    val maxAngle = lerp(7f, 26f, i)
+    val maxBlur = lerp(3f, 28f, i)
+    val depth = lerp(0.05f, 0.18f, i)
     val d = if (forward) 1f else -1f
     // Entering tilts in from one side; leaving tilts away to the other, so they fold around a shared spine.
     val sign = if (entering) -d else d
@@ -86,6 +89,19 @@ fun Modifier.foldScreen(scope: AnimatedVisibilityScope, forward: Boolean, intens
         label = "fold",
     ) { if (it == EnterExitState.Visible) 1f else 0f }
     return this.applyFold(foldFrame(p, forward, entering, intensity), withAlpha = false)
+}
+
+/**
+ * Content recedes with an animated depth-blur while something is lifted in front of it (a long-press
+ * menu, an action dialog). Same depth language as the Fold transition, scaled by fold intensity.
+ */
+@Composable
+fun Modifier.recedeBehind(active: Boolean, intensity: Float): Modifier {
+    val depth by animateFloatAsState(if (active) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "recede")
+    if (depth < 0.002f) return this
+    val i = intensity.coerceIn(0f, 1f)
+    val scale = 1f - 0.045f * lerp(0.7f, 1.3f, i) * depth
+    return this.graphicsLayer { scaleX = scale; scaleY = scale }.blur((lerp(10f, 24f, i) * depth).dp)
 }
 
 /** One-shot fold when Orbit itself opens: the whole app tilts in from folded to flat. */

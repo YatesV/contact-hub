@@ -260,7 +260,8 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
             )
         },
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
+        // Blur the list back when a long-press action dialog is up, so it reads as lifted in front
+        Column(Modifier.padding(pad).fillMaxSize().recedeBehind(actionsFor != null || snoozeFor != null || folderFor != null, settings.foldIntensity)) {
             if (mode == InboxMode.NORMAL) UpdateBanner()
             androidx.compose.animation.AnimatedVisibility(banner.isNotBlank()) { Banner(banner) { Hub.banner.value = "" } }
             if (l360Status.isNotBlank() && mode == InboxMode.NORMAL) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) {}

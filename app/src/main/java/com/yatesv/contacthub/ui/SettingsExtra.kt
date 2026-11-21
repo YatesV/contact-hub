@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -467,6 +469,10 @@ fun DeveloperPage() {
     SettingRow("Mock location", if (mock.active) "On: ${mock.item?.name.orEmpty()}" else "Fake GPS: single points, routes on real roads, favorites, schedules",
         androidx.compose.material.icons.Icons.Default.LocationOn, onClick = { Nav.go(Screen.MockLocation) })
 
+    SectionTitle("Updates")
+    SettingRow("Update history", "Every update so far, with patch notes", androidx.compose.material.icons.Icons.Default.History,
+        onClick = { Nav.go(Screen.SettingsPage("updatehistory")) })
+
     SectionTitle("Self-test")
     Text("Checks every feature it safely can. Nothing is sent to anyone. The report never includes what your messages say.",
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -672,3 +678,62 @@ fun LicensesPage() {
 @Suppress("unused") private val keepColor = Color.Unspecified
 @Suppress("unused") private fun Modifier.keepClick() = clickable { }
 @Suppress("unused") private val keepBox: @Composable () -> Unit = { Box(Modifier) }
+
+
+// ---------------- Update history ----------------
+
+/** Settings → Developer → Update history: every build, newest first, with patch notes. */
+@Composable
+fun UpdateHistoryPage() {
+    val ctx = LocalContext.current
+    val st by Updater.state.collectAsState()
+    val mine = com.yatesv.contacthub.BuildConfig.VERSION_CODE
+    var list by remember { mutableStateOf(com.yatesv.contacthub.engine.Changelog.merged(ctx)) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        com.yatesv.contacthub.engine.Changelog.refresh(ctx)?.let { list = com.yatesv.contacthub.engine.Changelog.merged(ctx, it) }
+        loading = false
+    }
+    val newer = list.count { it.build > mine }
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            when {
+                newer > 0 -> "You're on build $mine. $newer newer update${if (newer == 1) " is" else "s are"} out."
+                loading -> "You're on build $mine. Checking for newer updates…"
+                else -> "You're on build $mine, the newest one."
+            },
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (newer > 0) Button({
+            if (!Updater.canInstall(ctx)) ctx.startActivity(Updater.allowInstallsIntent(ctx)) else Hub.scope.launch { Updater.install(ctx) }
+        }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), enabled = st.progress !in 0f..0.999f) {
+            Text(if (st.progress in 0f..0.999f) "Downloading… ${(st.progress * 100).toInt()}%" else "Update to build ${list.first().build}")
+        }
+        if (list.isEmpty()) Text("No update history found.", Modifier.padding(16.dp))
+        list.forEach { u ->
+            val badge = when { u.build > mine -> "New"; u.build == mine -> "Installed"; else -> null }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Build ${u.build}", style = MaterialTheme.typography.titleMedium)
+                    if (badge != null) Text(badge, Modifier.padding(start = 8.dp).clip(RoundedCornerShape(50))
+                        .background(if (badge == "New") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (badge == "New") MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer)
+                    Spacer(Modifier.weight(1f))
+                    Text(com.yatesv.contacthub.engine.Changelog.prettyDate(u.date), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (u.title.isNotBlank()) Text(u.title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 2.dp, bottom = 4.dp))
+                u.notes.forEach { n ->
+                    Row(Modifier.padding(start = 4.dp, top = 2.dp)) {
+                        Text("•", Modifier.width(14.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(n, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}

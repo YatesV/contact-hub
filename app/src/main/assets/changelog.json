@@ -1,0 +1,190 @@
+{
+  "_howto": "Newest first. The newest entry uses \"build\": \"next\"; CI swaps in the real build number. When adding an update, change the old \"next\" to its real build number, then add the new entry on top with \"build\": \"next\".",
+  "updates": [
+    {
+      "build": "next",
+      "date": "2026-11-20T20:45",
+      "title": "Update history",
+      "notes": [
+        "New: Settings → Developer → Update history shows every update with patch notes",
+        "Shows updates newer than the one you have, so you can see what's coming before you install",
+        "Fixed: opening Crash & bug reports closed Orbit whenever it had reports in it",
+        "Every settings page is now opened by the automatic screen tests, to catch crashes like that before they ship"
+      ]
+    },
+    {
+      "build": 25,
+      "date": "2026-11-20T19:50",
+      "title": "Crash report tools",
+      "notes": [
+        "Crash & bug reports: Copy all, Share all (.txt file) and Clear all (asks first)",
+        "Native crashes are now readable: crashed thread, backtrace, Android's log, and which part of the phone crashed",
+        "Older unreadable crash reports get re-read once",
+        "Crashes that happen while Orbit is out of memory still save a short report",
+        "Fixed the wrong \"from before build 17\" message"
+      ]
+    },
+    {
+      "build": 23,
+      "date": "2026-11-20T19:01",
+      "title": "Keyboard GIFs",
+      "notes": [
+        "GIFs, stickers and images from Gboard or Samsung Keyboard now send straight from the chat box",
+        "Anything you typed goes along as the caption"
+      ]
+    },
+    {
+      "build": 21,
+      "date": "2026-11-20T13:37",
+      "title": "Full crash & bug reports",
+      "notes": [
+        "Every crash and caught bug saves a full report with the reason in plain English",
+        "Settings → Crash & bug reports lists them all, with a pop-up for anything new",
+        "Caught bugs also send a notification",
+        "Background jobs can no longer crash the app",
+        "Camera and photo fixes",
+        "Update files swap in without a gap, so the download link never breaks mid-publish"
+      ]
+    },
+    {
+      "build": 19,
+      "date": "2026-11-20T13:09",
+      "title": "Reliable update checks",
+      "notes": [
+        "Update checks read a small version file instead of GitHub's rate-limited API",
+        "Checks run every time Orbit opens",
+        "Clear messages when a check fails (offline, GitHub busy, build being published)"
+      ]
+    },
+    {
+      "build": 17,
+      "date": "2026-11-20T12:59",
+      "title": "Chat features, new call screen, easy setup, crash fixes",
+      "notes": [
+        "Chat: swipe to reply, forward, multi-select, delete, hold-to-record voice notes",
+        "Chat: camera and video, GIF search, photo editor (draw, crop, rotate), send location, send a contact card",
+        "Chat: auto-scroll with a \"↓ New message\" pill",
+        "Inbox: mark all read and an icon badge count",
+        "Contacts: merge duplicates and your own QR code",
+        "Calls: new call screen, audio picker (phone, speaker, each Bluetooth device), add, merge and swap calls",
+        "Calls: \"Text instead\" for incoming calls, call recording with optional auto-record",
+        "Easy setup: one screen with one big button that always does the next thing",
+        "Fixed about 25 bugs, including a voice-message crash, an app-lock bypass and a widget call security hole"
+      ]
+    },
+    {
+      "build": 13,
+      "date": "2026-11-20T04:21",
+      "title": "Orbit: new name, black icon, 23 new features",
+      "notes": [
+        "Contact Hub is now Orbit, with a black planet icon and 4 icons to pick from",
+        "Smart replies, \"Catch me up\" summaries and on-phone translation",
+        "Voice messages play in the bubble and turn into text",
+        "Snooze chats, search inside a chat, pinned messages, repeating scheduled texts",
+        "Birthday reminders, \"haven't talked in a while\" check-ins and relationship stats",
+        "Contact groups with colors and sounds, spam caller warnings, call notes",
+        "\"Text when I arrive\", today's Life360 trail, one-person home screen widgets",
+        "Text from your laptop over Wi-Fi, watch quick replies, shake to hide"
+      ]
+    },
+    {
+      "build": 11,
+      "date": "2026-11-20T03:13",
+      "title": "Simpler mock location, tappable links",
+      "notes": [
+        "Mock location: full-screen map with a fixed pin and one big \"Start here\" button",
+        "Mock location: easier routes, saved and recent spots one tap away, change spots without stopping",
+        "Chats: links, phone numbers, emails and map spots are tappable",
+        "Link previews under messages, and \"Select text\" to copy part of a message"
+      ]
+    },
+    {
+      "build": 10,
+      "date": "2026-11-20T02:48",
+      "title": "Mock location fixes",
+      "notes": [
+        "Fixed the \"go to my real location\" button",
+        "Asks for location permission instead of doing nothing",
+        "New red pin button jumps to the mock spot"
+      ]
+    },
+    {
+      "build": 9,
+      "date": "2026-11-20T02:32",
+      "title": "Mock location",
+      "notes": [
+        "New: mock location in Settings → Developer",
+        "Single spots or routes that follow real roads, with speed presets",
+        "Favorites, recents, scheduled starts, Quick Settings tile and notification controls",
+        "Life360 shows you at the mock spot"
+      ]
+    },
+    {
+      "build": 7,
+      "date": "2026-11-19T22:01",
+      "title": "Send queue, double-tap reactions, curve studio",
+      "notes": [
+        "Google Messages stays hidden while Orbit sends through it",
+        "Send messages back-to-back with a send queue; failed ones pause with Retry or Delete",
+        "Keyboard stays open after sending",
+        "Double-tap a message to react",
+        "Curve studio fixes, live previews and presets",
+        "Fixed Instagram, TikTok and Life360 sign-in pages"
+      ]
+    },
+    {
+      "build": 5,
+      "date": "2026-11-19T21:13",
+      "title": "Smoother app, page animations, friend sync",
+      "notes": [
+        "Optimized build: much smaller and faster",
+        "Photos fly between screens, tabs slide, headers shrink as you scroll",
+        "\"My curve\" animation editor",
+        "Friend sync: link Instagram and TikTok follows to your contacts"
+      ]
+    },
+    {
+      "build": 4,
+      "date": "2026-11-19T20:54",
+      "title": "Faster chats, cleaner look",
+      "notes": [
+        "Chats and the inbox open instantly and load older messages as you scroll",
+        "New clean look with large titles, pinned chats as circles and a pill text box",
+        "New contact card and round dial pad keys"
+      ]
+    },
+    {
+      "build": 3,
+      "date": "2026-11-19T20:42",
+      "title": "Settings fix",
+      "notes": [
+        "Fixed Settings opening every sub-page by itself",
+        "Help for unlocking the blocked text-message permission"
+      ]
+    },
+    {
+      "build": 2,
+      "date": "2026-11-19T20:28",
+      "title": "v2: fixes and Contact Hub mode",
+      "notes": [
+        "Fixed chats opening empty on Samsung",
+        "More reliable RCS sending and reactions",
+        "New mode where the app itself is your texting app (SMS and picture messages)",
+        "Step-by-step setup, Life360 sign-in, Google Drive backup, one-tap updates",
+        "Springy animations and a developer self-test"
+      ]
+    },
+    {
+      "build": 1,
+      "date": "2026-11-19T19:15",
+      "title": "First version",
+      "notes": [
+        "Inbox with folders, pin, archive, mute, swipe actions and search",
+        "Chats through Google Messages with RCS, reactions and scheduled sends",
+        "Contact pages with socials, Life360, stats and shared media",
+        "Dialer with keypad, recents, favorites and blocking",
+        "Themes, app lock and daily backup"
+      ]
+    }
+  ]
+}

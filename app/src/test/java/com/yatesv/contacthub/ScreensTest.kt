@@ -107,7 +107,7 @@ class ScreensTest {
 
     @Test fun everySettingsPage() {
         val pages = listOf("setup", "look", "motion", "messaging", "notifications", "privacy", "life360", "backup",
-            "privacydata", "developer", "about", "licenses")
+            "privacydata", "developer", "about", "licenses", "reports", "updatehistory", "ai", "arrivals", "laptop")
         var page by mutableStateHolder("setup")
         rule.mainClock.autoAdvance = false
         rule.setContent { HubTheme { SettingsPage(page.value) } }
@@ -139,6 +139,23 @@ class ScreensTest {
         rule.onNodeWithText("Orbit mode").performClick()
         rule.onNodeWithText("Get started").performClick(); settle()
         rule.onNodeWithText("Make Orbit your texting app").assertExists()
+    }
+
+    /** Crash & bug reports with a saved report: sits inside the scrolling settings page. */
+    @Test fun reportsPageOpens() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        java.io.File(ctx.filesDir, "reports").apply { mkdirs() }.resolve("bug-${System.currentTimeMillis()}.txt")
+            .writeText("ORBIT BUG REPORT\nWHY IT HAPPENED\nTest bug\n")
+        show { SettingsPage("reports") }
+        waitForText("Copy all")
+        rule.onNodeWithText("Clear all").performClick(); settle(300)
+        waitForText("Clear all reports?")
+    }
+
+    @Test fun updateHistoryPageOpens() {
+        show { SettingsPage("updatehistory") }
+        waitForText("Build 25")
+        waitForText("Crash report tools")
     }
 }
 

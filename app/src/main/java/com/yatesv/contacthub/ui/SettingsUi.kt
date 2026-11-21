@@ -128,7 +128,7 @@ fun SettingsHome() {
 fun SettingsPage(page: String) {
     val title = mapOf("setup" to "Permissions checklist", "look" to "Look & feel", "messaging" to "Messaging", "notifications" to "Notifications",
         "privacy" to "Privacy & security", "life360" to "Life360", "backup" to "Backup", "about" to "About & updates", "motion" to "Motion & feel",
-        "developer" to "Developer", "reports" to "Crash & bug reports", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
+        "developer" to "Developer", "reports" to "Crash & bug reports", "updatehistory" to "Update history", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
         "ai" to "AI & smart replies", "arrivals" to "Arrival texts", "laptop" to "Text from your laptop")[page] ?: "Settings"
     Scaffold(topBar = {
         TopAppBar(title = { Text(title) }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
@@ -145,6 +145,7 @@ fun SettingsPage(page: String) {
                 "motion" -> MotionPage()
                 "developer" -> DeveloperPage()
                 "reports" -> ReportsPage()
+                "updatehistory" -> UpdateHistoryPage()
                 "privacydata" -> PrivacyDataPage()
                 "licenses" -> LicensesPage()
                 "ai" -> AiPage()

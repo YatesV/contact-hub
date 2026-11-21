@@ -39,7 +39,7 @@ object Updater {
 
     private class HttpError(val code: Int) : Exception("HTTP $code")
 
-    private fun get(url: String): String {
+    internal fun get(url: String): String {
         var u = URL(url)
         repeat(6) {
             val c = (u.openConnection() as HttpURLConnection).apply {

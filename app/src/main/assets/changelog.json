@@ -3,6 +3,15 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-21T00:10",
+      "title": "Adjustable scroll speed",
+      "notes": [
+        "New: Settings → Motion & feel → Scroll speed lets you make lists scroll as fast or slow as you like",
+        "Faster than normal by default — a flick carries further in chats, the inbox, contacts and recent calls"
+      ]
+    },
+    {
+      "build": 41,
       "date": "2026-11-21T00:05",
       "title": "Smart Reply crash fix + photo attachments",
       "notes": [

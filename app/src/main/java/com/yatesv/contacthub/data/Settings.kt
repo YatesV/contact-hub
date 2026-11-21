@@ -91,6 +91,8 @@ data class Settings(
     val transition: String = "fold",         // fold, slide, fade, zoom
     /** Fold transition strength, 0 = subtle, 1 = dramatic. */
     val foldIntensity: Float = 0.85f,
+    /** How far flings carry when scrolling: 1 = normal, higher = faster. */
+    val scrollSpeed: Float = 1.6f,
     val menuStyle: String = "ios",          // ios, sheet
     val haptics: Boolean = true,
     val screenEffects: Boolean = false,
@@ -124,7 +126,7 @@ data class Settings(
         put("l360Enabled", l360Enabled); put("mapboxToken", mapboxToken); put("smartReplies", smartReplies); put("aiProvider", aiProvider); put("aiKey", aiKey); put("aiModel", aiModel)
         put("translateTo", translateTo); put("birthdayReminders", birthdayReminders); put("panicShake", panicShake); put("mockMapStyle", mockMapStyle); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
-        put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("foldIntensity", foldIntensity.toDouble()); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
+        put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("foldIntensity", foldIntensity.toDouble()); put("scrollSpeed", scrollSpeed.toDouble()); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
         put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion); put("designVersion", designVersion)
     }
@@ -164,6 +166,7 @@ data class Settings(
                 motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
                 springStiffness = j.optDouble("springStiffness", 380.0).toFloat(), transition = j.optString("transition", d.transition),
                 foldIntensity = j.optDouble("foldIntensity", d.foldIntensity.toDouble()).toFloat(),
+                scrollSpeed = j.optDouble("scrollSpeed", d.scrollSpeed.toDouble()).toFloat(),
                 curvePoints = j.optString("curvePoints", d.curvePoints), curveDuration = j.optInt("curveDuration", d.curveDuration),
                 menuStyle = j.optString("menuStyle", d.menuStyle), haptics = j.optBoolean("haptics", true),
                 screenEffects = j.optBoolean("screenEffects", false), sendSound = j.optBoolean("sendSound", false),

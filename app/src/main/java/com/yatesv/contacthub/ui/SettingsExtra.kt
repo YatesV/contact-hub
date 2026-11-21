@@ -119,6 +119,10 @@ fun MotionPage() {
         upd { it.copy(foldIntensity = v) }; replay++
     }
     ChoiceRow("Long-press menu", listOf("ios" to "iOS (lift + blur)", "sheet" to "Bottom sheet"), s.menuStyle) { v -> upd { it.copy(menuStyle = v) } }
+    SliderRow("Scroll speed", s.scrollSpeed, 1f..2.6f,
+        when { s.scrollSpeed <= 1.05f -> "Normal"; s.scrollSpeed >= 2.4f -> "Fastest"; else -> "%.1f×".format(s.scrollSpeed) }) { v ->
+        upd { it.copy(scrollSpeed = v) }
+    }
     SectionTitle("Extras")
     SwitchRow("Vibration", "Light ticks on send, react, swipe, long-press", s.haptics) { v -> upd { it.copy(haptics = v) }; if (v) Haptics.confirm(view) }
     SwitchRow("Animated reactions", "Reactions pop and wiggle when they appear", s.animatedReactions) { v -> upd { it.copy(animatedReactions = v) } }

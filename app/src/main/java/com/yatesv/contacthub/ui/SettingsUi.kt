@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Shield
@@ -109,6 +110,7 @@ fun SettingsHome() {
             SettingRow("AI & smart replies", "Reply suggestions, catch-up summaries, translation, birthdays", androidx.compose.material.icons.Icons.Default.AutoAwesome, onClick = { Nav.go(Screen.SettingsPage("ai")) })
             SettingRow("Arrival texts", "Text someone automatically when you get somewhere", androidx.compose.material.icons.Icons.Default.Place, onClick = { Nav.go(Screen.SettingsPage("arrivals")) })
             SettingRow("Text from your laptop", "Open Orbit in a browser on the same Wi-Fi", androidx.compose.material.icons.Icons.Default.Laptop, onClick = { Nav.go(Screen.SettingsPage("laptop")) })
+            SettingRow("Call recordings", "Where they're saved, play, save or share them", Icons.Default.Mic, onClick = { Nav.go(Screen.SettingsPage("recordings")) })
             SettingRow("Backup", "Daily backup, Google Drive, export, restore", Icons.Default.Backup, onClick = { Nav.go(Screen.SettingsPage("backup")) })
             }
             SettingsGroup {
@@ -128,7 +130,7 @@ fun SettingsHome() {
 fun SettingsPage(page: String) {
     val title = mapOf("setup" to "Permissions checklist", "look" to "Look & feel", "messaging" to "Messaging", "notifications" to "Notifications",
         "privacy" to "Privacy & security", "life360" to "Life360", "backup" to "Backup", "about" to "About & updates", "motion" to "Motion & feel",
-        "developer" to "Developer", "reports" to "Crash & bug reports", "updatehistory" to "Update history", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
+        "developer" to "Developer", "reports" to "Crash & bug reports", "updatehistory" to "Update history", "recordings" to "Call recordings", "privacydata" to "Privacy & data", "licenses" to "Open-source licenses",
         "ai" to "AI & smart replies", "arrivals" to "Arrival texts", "laptop" to "Text from your laptop")[page] ?: "Settings"
     Scaffold(topBar = {
         TopAppBar(title = { Text(title) }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
@@ -146,6 +148,7 @@ fun SettingsPage(page: String) {
                 "developer" -> DeveloperPage()
                 "reports" -> ReportsPage()
                 "updatehistory" -> UpdateHistoryPage()
+                "recordings" -> com.yatesv.contacthub.phone.CallRecordingsPage()
                 "privacydata" -> PrivacyDataPage()
                 "licenses" -> LicensesPage()
                 "ai" -> AiPage()

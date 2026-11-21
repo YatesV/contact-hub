@@ -3,6 +3,16 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-21T00:05",
+      "title": "Smart Reply crash fix + photo attachments",
+      "notes": [
+        "Fixed for good: the app closing because of Google's on-device Smart Reply. The moment it crashes once, Orbit turns on-device Smart Reply off and keeps it off (turn it back on any time in AI & smart replies). Reply suggestions with an AI key are unaffected.",
+        "Photos people send over RCS now pull in from the notification's preview, so more of them show in the chat instead of just \"Attachment\"",
+        "Some RCS files still can't be reached (they live inside Google Messages) — those still open in Google Messages to view or download"
+      ]
+    },
+    {
+      "build": 39,
       "date": "2026-11-20T23:15",
       "title": "Call recordings in Settings",
       "notes": [

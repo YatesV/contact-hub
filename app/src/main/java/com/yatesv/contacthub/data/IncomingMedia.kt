@@ -3,6 +3,7 @@ package com.yatesv.contacthub.data
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -55,6 +56,14 @@ object IncomingMedia {
         if (f.length() == 0L) { f.delete(); error("empty") }
         f to type
     }.onFailure { HubLog.w("Media", "couldn't copy attachment from notification ($mime)", it) }.getOrNull()
+
+    /** Saves a bitmap (e.g. a photo message's big-picture preview from the notification) as a JPEG. */
+    fun saveBitmap(ctx: Context, bmp: Bitmap): Pair<File, String>? = runCatching {
+        val f = File(dir(ctx), "rcs-${System.currentTimeMillis()}-${bmp.hashCode() and 0xffff}.jpg")
+        f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        if (f.length() == 0L) { f.delete(); error("empty") }
+        f to "image/jpeg"
+    }.onFailure { HubLog.w("Media", "couldn't save the notification picture", it) }.getOrNull()
 
     /** Orbit's own shareable link for a saved file. */
     fun uri(ctx: Context, f: File): Uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)

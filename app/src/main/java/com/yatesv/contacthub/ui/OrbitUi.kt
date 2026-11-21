@@ -642,7 +642,8 @@ fun ReportsPage() {
     val fmt = remember { java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault()) }
     val scope = rememberCoroutineScope()
     var confirmClear by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+    // No scroll here: the settings page around it already scrolls (two scrolls inside each other crash)
+    Column(Modifier.fillMaxWidth()) {
         val l = list
         when {
             l == null -> {}

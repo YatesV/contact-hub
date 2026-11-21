@@ -55,6 +55,8 @@ jobs:
           BUILD: ${{ github.run_number }}
         run: |
           echo "{\"build\": $BUILD, \"sha\": \"${{ github.sha }}\"}" > version.json
+          # Patch notes for Settings > Developer > Update history; the newest ("next") entry gets this build's number
+          sed "s/\"build\": \"next\"/\"build\": $BUILD/" app/src/main/assets/changelog.json > changelog.json
           TITLE="Orbit build #$BUILD"
           NOTES="Download **Orbit.apk** below and open it on your phone to install. Updates install over the old version and keep your data."
           if gh release view latest >/dev/null 2>&1; then
@@ -72,11 +74,12 @@ jobs:
             }
             swap Orbit.apk
             swap ContactHub.apk
+            swap changelog.json
             swap version.json
             gh release edit latest --title "$TITLE" --notes "$NOTES" --latest
             git tag -f latest "${{ github.sha }}"
             git push -f origin refs/tags/latest || true
           else
-            gh release create latest Orbit.apk ContactHub.apk version.json \
+            gh release create latest Orbit.apk ContactHub.apk changelog.json version.json \
               --target "${{ github.sha }}" --title "$TITLE" --notes "$NOTES" --latest
           fi

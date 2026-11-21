@@ -28,4 +28,9 @@ class ChangelogTest {
         assertEquals("Nov 20, 7:50 PM", Changelog.prettyDate("2026-11-20T19:50"))
         assertEquals("garbage", Changelog.prettyDate("garbage"))
     }
+
+    @Test fun recognizesAndroid17SelfUpdateBlock() {
+        assertTrue(com.yatesv.contacthub.engine.Updater.isSelfUpdateBlock("INSTALL_FAILED_ABORTED: Self update is blocked by unknown source package"))
+        assertTrue(!com.yatesv.contacthub.engine.Updater.isSelfUpdateBlock("INSTALL_FAILED_ABORTED: User rejected permissions"))
+    }
 }

@@ -149,8 +149,10 @@ object Tombstone {
         val name = t?.name.orEmpty().lowercase()
         val sig = listOf(info.signal, info.code).filter { it.isNotBlank() }.joinToString(" / ")
         val where = when {
-            "translate_jni" in files || "language_id" in files || "predictor_jni" in files ->
-                "ML Kit (Orbit's on-phone translation / language detection / smart replies) crashed."
+            "predictor_jni" in files || "smartreply" in files ->
+                "Google's on-device Smart Reply (reply suggestions above the keyboard and in notifications) crashed."
+            "translate_jni" in files -> "Google's on-device translation (ML Kit) crashed."
+            "language_id" in files -> "Google's on-device language detection (ML Kit) crashed."
             "graphics.path" in files -> "The AndroidX graphics library (used for animated shapes) crashed."
             "libhwui" in files || "renderthread" in name || "hwui" in name ->
                 "Android's screen-drawing engine (RenderThread) crashed while drawing Orbit. This is usually a graphics bug in the phone's Android version, set off by an animation, blur or image."
@@ -175,8 +177,10 @@ object Tombstone {
         if (info.abort.isNotBlank()) appendLine("Abort message: ${info.abort.take(1000)}")
         info.causes.forEach { appendLine("Cause: $it") }
         appendLine("Crashed thread: \"${t?.name ?: "?"}\" (tid ${info.tid})")
-        val orbitFrame = t?.frames?.firstOrNull { it.file.contains("com.yatesv.contacthub") }
-        orbitFrame?.let { appendLine("Closest Orbit code: ${it.function.ifBlank { "?" }} in ${it.file.substringAfterLast('/')}") }
+        val orbitFrame = t?.frames?.firstOrNull { it.function.startsWith("com.yatesv.contacthub") }
+        orbitFrame?.let { appendLine("Closest Orbit code: ${it.function}") }
+        val lib = t?.frames?.firstOrNull { it.file.contains("!lib") || (it.file.endsWith(".so") && !it.file.contains("/apex/")) }
+        lib?.let { appendLine("Library: ${it.file.substringAfterLast('!').substringAfterLast('/')}" + (it.function.takeIf { f -> f.isNotBlank() }?.let { f -> " · ${f.substringBefore('(').take(120)}" } ?: "")) }
         appendLine()
         appendLine("CRASHED THREAD BACKTRACE")
         t?.frames.orEmpty().take(40).forEachIndexed { i, f ->

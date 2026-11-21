@@ -147,7 +147,8 @@ object ChatData0 {
         val merged = ArrayList(provider)
         for (l in locals) {
             val dup = provider.any { p -> p.outgoing == l.outgoing && p.body.trim() == l.body.trim() && kotlin.math.abs(p.date - l.date) < 180_000 }
-            if (!dup) merged += Msg("l:${l.id}", l.body, l.date, l.outgoing, l.sender, rcs = true,
+            if (!dup) merged += Msg("l:${l.id}", l.body, l.date, l.outgoing, l.sender,
+                attachments = com.yatesv.contacthub.data.IncomingMedia.forMessage(Hub.app, "l:${l.id}"), rcs = true,
                 status = if (l.source == "failed") 2 else 0)
         }
         merged.sortBy { it.date }
@@ -667,6 +668,19 @@ fun ChatScreen(key: String) {
         }
         val pinned = Hub.orbit.pins(key).any { it.msgKey == m.key }
         val extra = buildList<Pair<String, () -> Unit>> {
+            if (m.attachments.isNotEmpty()) {
+                add("Open" to { selected = null; m.attachments.firstOrNull()?.let { a -> if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "Couldn't open it" } })
+                add((if (m.attachments.size > 1) "Save all to phone" else "Save to phone") to {
+                    selected = null
+                    scope.launch {
+                        val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            m.attachments.mapNotNull { com.yatesv.contacthub.data.IncomingMedia.saveToPhone(ctx, it) }
+                        }
+                        Hub.banner.value = if (saved.isEmpty()) "Couldn't save it" else "Saved to ${saved.first().substringBeforeLast('/')}"
+                    }
+                })
+            } else if (!m.outgoing && m.key.startsWith("l:") && com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(m.body))
+                add("See it in Google Messages" to { selected = null; com.yatesv.contacthub.data.IncomingMedia.openInMessages(ctx, key) })
             if (!m.key.startsWith("q:")) add("Reply" to { selected = null; replyTo = m; runCatching { focus.requestFocus() } })
             add("Forward" to { selected = null; forwardThese = listOf(m) })
             add("Select" to { selected = null; picked = setOf(m.key) })
@@ -853,23 +867,35 @@ internal fun Bubble(
                         a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime)
                         a.mime.startsWith("image") -> AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
                             .clickable {
-                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                                    .onFailure { Hub.banner.value = "No app on this phone opens this picture" }
+                                if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "Couldn't open this picture"
                             },
                             contentScale = ContentScale.Crop)
                         // Contact cards, PDFs and other files: a tappable row instead of a broken picture
                         else -> Row(Modifier.clickable {
-                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(a.uri, a.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                                .onFailure { Hub.banner.value = "No app on this phone opens ${a.mime} files" }
+                            if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "No app on this phone opens ${a.mime} files"
                         }.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(if (a.mime.contains("vcard")) Icons.Default.Person else Icons.Default.AttachFile, null, tint = fg)
                             Text(if (a.mime.contains("vcard")) "  Contact card" else "  ${a.mime.substringAfter('/').uppercase()} file", color = fg)
                         }
                     }
                 }
+                // An RCS file Orbit couldn't copy: say what it is and open it where it can be seen and downloaded
+                val missingFile = !m.outgoing && m.key.startsWith("l:") && m.attachments.isEmpty() &&
+                    remember(m.body) { com.yatesv.contacthub.data.IncomingMedia.isPlaceholder(m.body) }
+                if (missingFile) {
+                    Row(Modifier.clickable {
+                        if (!com.yatesv.contacthub.data.IncomingMedia.openInMessages(ctx, Hub.openConv)) Hub.banner.value = "Couldn't open Google Messages"
+                    }.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AttachFile, null, tint = fg)
+                        Column(Modifier.padding(start = 8.dp)) {
+                            Text(m.body.trim(), color = fg, fontSize = 16.sp)
+                            Text("Tap to see it in Google Messages", color = fg.copy(alpha = 0.75f), fontSize = 12.sp)
+                        }
+                    }
+                }
                 val (quoted, shownBody) = remember(m.body) { com.yatesv.contacthub.data.Quote.split(m.body) }
                 if (quoted != null && !emojiOnly) QuoteBlock(quoted, fg)
-                if (m.body.isNotBlank()) {
+                if (m.body.isNotBlank() && !missingFile) {
                     LinkText(shownBody, color = if (emojiOnly) MaterialTheme.colorScheme.onSurface else fg,
                         fontSize = if (emojiOnly) (16 * style.emojiScale * 1.5f).sp else 16.sp,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), onPhone = onPhone)

@@ -26,6 +26,8 @@ import com.yatesv.contacthub.Hub
 import com.yatesv.contacthub.data.HubLog
 import com.yatesv.contacthub.data.Msg
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -118,15 +120,66 @@ object Ai {
         return onDeviceReplies(recent)
     }
 
-    /** Google's on-device Smart Reply (English only, nothing leaves the phone). */
-    suspend fun onDeviceReplies(recent: List<Msg>): List<String> = runCatching {
-        val conv = recent.map { m ->
-            if (m.outgoing) TextMessage.createForLocalUser(m.body, m.date)
-            else TextMessage.createForRemoteUser(m.body, m.date, m.sender.ifBlank { "them" })
+    // One Smart Reply engine for the whole app, used by one caller at a time.
+    // Before: a new engine per call that nothing held onto, so Android could clean it up mid-prediction,
+    // and the chat screen + notifications ran engines at the same time. Both crash ML Kit's native code.
+    private val smartReply by lazy { SmartReply.getClient() }
+    private val smartReplyLock = kotlinx.coroutines.sync.Mutex()
+
+    private fun srPrefs() = Hub.app.getSharedPreferences("smartreply", Context.MODE_PRIVATE)
+
+    /**
+     * Crash guard: a marker is written right before each prediction and removed after. If Orbit starts and the
+     * marker is still there, the last prediction closed the app. After 2 of those on the same build,
+     * on-device Smart Reply turns itself off until the next update (AI-key replies still work).
+     */
+    private val smartReplyCheckedOnce by lazy {
+        runCatching {
+            val p = srPrefs()
+            val build = com.yatesv.contacthub.BuildConfig.VERSION_CODE
+            if (p.contains("inflight")) {
+                val n = if (p.getInt("crashBuild", 0) == build) p.getInt("crashes", 0) + 1 else 1
+                p.edit().remove("inflight").putInt("crashBuild", build).putInt("crashes", n).commit()
+                HubLog.w("Ai", "Smart Reply closed Orbit last time ($n on build $build)")
+            }
         }
-        val r = SmartReply.getClient().suggestReplies(conv).await()
-        if (r.status == SmartReplySuggestionResult.STATUS_SUCCESS) r.suggestions.map { it.text }.take(3) else emptyList()
-    }.getOrElse { HubLog.w("Ai", "smart reply failed", it); emptyList() }
+        true
+    }
+
+    /** False if Smart Reply crashed Orbit twice on this build (it turns back on with the next update). */
+    val smartReplyHealthy: Boolean get() {
+        smartReplyCheckedOnce
+        val p = srPrefs()
+        return !(p.getInt("crashBuild", 0) == com.yatesv.contacthub.BuildConfig.VERSION_CODE && p.getInt("crashes", 0) >= 2)
+    }
+
+    /** Google's on-device Smart Reply (English only, nothing leaves the phone). */
+    suspend fun onDeviceReplies(recent: List<Msg>): List<String> {
+        if (!smartReplyHealthy) return emptyList()
+        // Clean input: last 10 non-empty messages, trimmed, times strictly increasing
+        var last = 0L
+        val conv = recent.filter { it.body.isNotBlank() }.takeLast(10).map { m ->
+            val t = maxOf(m.date, last + 1).also { last = it }
+            val body = m.body.trim().take(500)
+            if (m.outgoing) TextMessage.createForLocalUser(body, t)
+            else TextMessage.createForRemoteUser(body, t, m.sender.ifBlank { "them" })
+        }
+        if (conv.isEmpty()) return emptyList()
+        // The prediction runs in the app's scope: if the caller gives up (screen closed, timeout), the engine still
+        // finishes before the next one starts, so two predictions never overlap.
+        val job = Hub.scope.async(Dispatchers.Default) {
+            smartReplyLock.withLock {
+                val p = srPrefs()
+                p.edit().putBoolean("inflight", true).commit()
+                try {
+                    val r = smartReply.suggestReplies(conv).await()
+                    if (r.status == SmartReplySuggestionResult.STATUS_SUCCESS) r.suggestions.map { it.text }.take(3) else emptyList()
+                } finally { p.edit().remove("inflight").commit() }
+            }
+        }
+        return try { job.await() } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Throwable) { HubLog.w("Ai", "smart reply failed", e); emptyList() }
+    }
 
     // ---------------- Catch me up ----------------
 
@@ -140,9 +193,12 @@ object Ai {
 
     // ---------------- Translation ----------------
 
+    /** Kept for the app's lifetime (a throwaway client can be cleaned up while it's still working). */
+    private val languageId by lazy { LanguageIdentification.getClient() }
+
     /** Translates to [Settings.translateTo] (or the phone's language). Downloads the language pack the first time (~30 MB each). */
     suspend fun translate(text: String): Result<Pair<String, String>> = runCatching {
-        val src = LanguageIdentification.getClient().identifyLanguage(text).await()
+        val src = languageId.identifyLanguage(text).await()
         if (src == "und") error("Couldn't tell what language that is")
         val target = s.translateTo.ifBlank { java.util.Locale.getDefault().language }
         val from = TranslateLanguage.fromLanguageTag(src) ?: error("Can't translate from $src yet")

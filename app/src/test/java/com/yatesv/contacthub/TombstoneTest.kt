@@ -53,7 +53,13 @@ class TombstoneTest {
 
     @Test fun mlKitCrashIsNamed() {
         val b = Pb().int(6, 7).msg(16, entry(7, thread(7, "pool-3", frame("/data/app/x/lib/arm64/libtranslate_jni.so", "")))).build()
-        assertTrue(Tombstone.explain(Tombstone.parse(b)!!).contains("ML Kit"))
+        assertTrue(Tombstone.explain(Tombstone.parse(b)!!).contains("translation"))
+        val sr = Pb().int(6, 8).msg(16, entry(8, thread(8, "pool-7-thread-2", frame("/data/app/x/base.apk!libpredictor_jni.so", "hobbes::HobbesPredict")))).build()
+        val info = Tombstone.parse(sr)!!
+        assertTrue(Tombstone.explain(info).contains("Smart Reply"))
+        val text = Tombstone.render(info)
+        assertTrue(text, text.contains("Library: libpredictor_jni.so · hobbes::HobbesPredict"))
+        assertTrue(text, !text.contains("Closest Orbit code"))
     }
 
     @Test fun garbageDoesNotThrow() {

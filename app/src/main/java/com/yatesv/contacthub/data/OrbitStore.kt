@@ -42,6 +42,14 @@ class OrbitStore(ctx: Context) {
     @Synchronized fun snooze(key: String, until: Long) = put("snooze", obj("snooze").put(key, JSONObject().put("until", until).put("at", System.currentTimeMillis())))
     @Synchronized fun unsnooze(key: String) = put("snooze", obj("snooze").apply { remove(key) })
 
+    // ---------------- Attachments of RCS messages ----------------
+    /** msgKey ("l:<id>") → saved files (path, mime) */
+    fun files(msgKey: String): List<Pair<String, String>> = obj("files").optJSONArray(msgKey)?.let { a ->
+        (0 until a.length()).map { a.getJSONObject(it).let { o -> o.getString("p") to o.optString("m") } }
+    }.orEmpty()
+    @Synchronized fun setFiles(msgKey: String, list: List<Pair<String, String>>) =
+        put("files", obj("files").put(msgKey, JSONArray().apply { list.forEach { (p, m) -> put(JSONObject().put("p", p).put("m", m)) } }))
+
     // ---------------- Pinned messages ----------------
     fun pins(key: String): List<PinnedMsg> = obj("pins").optJSONArray(key)?.let { a ->
         (0 until a.length()).map { a.getJSONObject(it).let { o -> PinnedMsg(o.getString("k"), o.optString("b"), o.optLong("d")) } }

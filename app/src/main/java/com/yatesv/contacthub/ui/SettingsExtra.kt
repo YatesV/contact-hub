@@ -419,6 +419,7 @@ fun UpdateCard() {
     })
     if (st.progress in 0f..0.999f) LinearProgressIndicator({ st.progress }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
     if (st.error.isNotBlank()) Text(st.error, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+    if (st.note.isNotBlank()) Text(st.note, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.primary)
     Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton({ scope.launch {
             val r = Updater.check(force = true)

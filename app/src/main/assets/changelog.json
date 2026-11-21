@@ -3,6 +3,18 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-20T22:30",
+      "title": "The Fold transition (Phase 2)",
+      "notes": [
+        "New default look: screens now fold in and out in 3D with a depth blur, like the iPhone Duo's open/close animation — content stays anchored while the screen tilts around it",
+        "The whole app folds in when you open Orbit, and folds away when you close it",
+        "Settings → Motion & feel → Screen transition lets you pick Fold, Slide, Fade or Zoom",
+        "New Fold intensity slider, from Subtle to Dramatic",
+        "Turns itself off if you have Android's reduce-motion on, and skips the blur on older phones that can't do it"
+      ]
+    },
+    {
+      "build": 30,
       "date": "2026-11-20T22:10",
       "title": "Faster everywhere (Phase 1 of the speed + animation overhaul)",
       "notes": [

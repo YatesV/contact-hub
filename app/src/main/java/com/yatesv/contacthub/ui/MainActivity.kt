@@ -1,7 +1,9 @@
 package com.yatesv.contacthub.ui
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import com.yatesv.contacthub.R
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -98,6 +100,9 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Fold the app away when it closes (back/swipe), matching the in-app Fold transition. API 34+ only.
+        if (Build.VERSION.SDK_INT >= 34 && Hub.settings.value.transition == "fold" && Motion.enabled())
+            runCatching { overrideActivityTransition(android.app.Activity.OVERRIDE_TRANSITION_CLOSE, 0, R.anim.fold_close_exit) }
         if (savedInstanceState == null) Nav.tab = Hub.settings.value.startTab
         // Only the first time: after a rotation/dark-mode restart Android hands the same intent back,
         // which used to throw you into that chat again
@@ -228,6 +233,7 @@ fun AppRoot() {
     BackHandler(Nav.stack.size > 1) { Nav.back() }
     val s by Hub.settings.flow.collectAsState()
     val effect by Effects.current.collectAsState()
+    AppOpenFold(enabled = s.transition == "fold" && Motion.enabled(s), intensity = s.foldIntensity) {
     androidx.compose.animation.SharedTransitionLayout(Modifier.fillMaxSize()) {
     val shared = this
     AnimatedContent(
@@ -237,7 +243,8 @@ fun AppRoot() {
         modifier = Modifier.fillMaxSize(),
     ) { top ->
         androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides shared, LocalScreenScope provides this) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        val foldMod = if (s.transition == "fold" && Motion.enabled(s)) Modifier.foldScreen(this, Nav.forward, s.foldIntensity) else Modifier
+        Box(Modifier.fillMaxSize().then(foldMod).background(MaterialTheme.colorScheme.background)) {
         when (top) {
             Screen.Tabs -> Tabs()
             is Screen.Chat -> ChatScreen(top.key)
@@ -260,6 +267,7 @@ fun AppRoot() {
         }
     }
     }
+    }
     effect?.let { e -> EffectOverlay(e) { Effects.current.value = null } }
 }
 
@@ -272,6 +280,11 @@ private fun AnimatedContentTransitionScope<Screen>.screenTransition(s: com.yates
     val fade: androidx.compose.animation.core.FiniteAnimationSpec<Float> = p?.let { spring(1f, it.stiffness) } ?: Motion.spec(Motion.Cat.PAGES, s)
     val scale: androidx.compose.animation.core.FiniteAnimationSpec<Float> = Motion.spec(Motion.Cat.PAGES, s)
     return when (s.transition) {
+        // Fold: the fade here gives the timing + see-through; the 3D tilt + blur is added per-screen by Modifier.foldScreen
+        "fold" -> {
+            val f = androidx.compose.animation.core.tween<Float>(FOLD_DURATION_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+            (fadeIn(f) togetherWith fadeOut(f)).apply { targetContentZIndex = if (forward) 1f else 0f }
+        }
         "fade" -> fadeIn(fade) togetherWith fadeOut(fade)
         "zoom" -> (scaleIn(scale, 0.92f) + fadeIn(fade)) togetherWith (scaleOut(scale, 1.05f) + fadeOut(fade))
         else -> if (forward) {

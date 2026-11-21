@@ -88,7 +88,9 @@ data class Settings(
     val curveSnap: Boolean = false,
     val springDamping: Float = 0.86f,       // used when motion = custom
     val springStiffness: Float = 380f,
-    val transition: String = "slide",       // slide, fade, zoom
+    val transition: String = "fold",         // fold, slide, fade, zoom
+    /** Fold transition strength, 0 = subtle, 1 = dramatic. */
+    val foldIntensity: Float = 0.35f,
     val menuStyle: String = "ios",          // ios, sheet
     val haptics: Boolean = true,
     val screenEffects: Boolean = false,
@@ -122,7 +124,7 @@ data class Settings(
         put("l360Enabled", l360Enabled); put("mapboxToken", mapboxToken); put("smartReplies", smartReplies); put("aiProvider", aiProvider); put("aiKey", aiKey); put("aiModel", aiModel)
         put("translateTo", translateTo); put("birthdayReminders", birthdayReminders); put("panicShake", panicShake); put("mockMapStyle", mockMapStyle); put("backupDaily", backupDaily); put("lastBackup", lastBackup); put("onboarded", onboarded)
         put("motion", motion); put("springDamping", springDamping.toDouble()); put("springStiffness", springStiffness.toDouble())
-        put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
+        put("curvePoints", curvePoints); put("curveDuration", curveDuration); put("transition", transition); put("foldIntensity", foldIntensity.toDouble()); put("menuStyle", menuStyle); put("haptics", haptics); put("screenEffects", screenEffects)
         put("sendSound", sendSound); put("animatedReactions", animatedReactions); put("driveUri", driveUri)
         put("autoUpdate", autoUpdate); put("lastUpdateCheck", lastUpdateCheck); put("setupVersion", setupVersion); put("designVersion", designVersion)
     }
@@ -161,6 +163,7 @@ data class Settings(
                 onboarded = j.optBoolean("onboarded", false),
                 motion = j.optString("motion", d.motion), springDamping = j.optDouble("springDamping", 0.86).toFloat(),
                 springStiffness = j.optDouble("springStiffness", 380.0).toFloat(), transition = j.optString("transition", d.transition),
+                foldIntensity = j.optDouble("foldIntensity", d.foldIntensity.toDouble()).toFloat(),
                 curvePoints = j.optString("curvePoints", d.curvePoints), curveDuration = j.optInt("curveDuration", d.curveDuration),
                 menuStyle = j.optString("menuStyle", d.menuStyle), haptics = j.optBoolean("haptics", true),
                 screenEffects = j.optBoolean("screenEffects", false), sendSound = j.optBoolean("sendSound", false),
@@ -174,9 +177,13 @@ data class Settings(
 
 class SettingsStore(ctx: Context) {
     private val prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    private val _flow = MutableStateFlow(load().let { s ->
+    private val _flow = MutableStateFlow(load().let { s0 ->
+        var s = s0
         // One-time move to the new default look for people who never picked a style
-        if (s.designVersion < 1) s.copy(designVersion = 1, preset = if (s.preset == "google" && s.sentColor == 0 && s.recvColor == 0) "hub" else s.preset) else s
+        if (s.designVersion < 1) s = s.copy(designVersion = 1, preset = if (s.preset == "google" && s.sentColor == 0 && s.recvColor == 0) "hub" else s.preset)
+        // One-time move to the new Fold transition for anyone still on the old default slide
+        if (s.designVersion < 2) s = s.copy(designVersion = 2, transition = if (s.transition == "slide") "fold" else s.transition)
+        s
     })
     val flow: StateFlow<Settings> = _flow
     val value: Settings get() = _flow.value

@@ -113,7 +113,11 @@ fun MotionPage() {
         upd { it.copy(motion = "custom", springStiffness = v) }; replay++
     }
     SectionTitle("Screens & menus")
-    ChoiceRow("Screen transition", listOf("slide" to "iOS slide", "fade" to "Fade", "zoom" to "Zoom"), s.transition) { v -> upd { it.copy(transition = v) } }
+    ChoiceRow("Screen transition", listOf("fold" to "Fold (3D)", "slide" to "iOS slide", "fade" to "Fade", "zoom" to "Zoom"), s.transition) { v -> upd { it.copy(transition = v) } }
+    if (s.transition == "fold") SliderRow("Fold intensity", s.foldIntensity, 0f..1f,
+        when { s.foldIntensity < 0.2f -> "Subtle"; s.foldIntensity > 0.8f -> "Dramatic"; else -> "%.0f%%".format(s.foldIntensity * 100) }) { v ->
+        upd { it.copy(foldIntensity = v) }; replay++
+    }
     ChoiceRow("Long-press menu", listOf("ios" to "iOS (lift + blur)", "sheet" to "Bottom sheet"), s.menuStyle) { v -> upd { it.copy(menuStyle = v) } }
     SectionTitle("Extras")
     SwitchRow("Vibration", "Light ticks on send, react, swipe, long-press", s.haptics) { v -> upd { it.copy(haptics = v) }; if (v) Haptics.confirm(view) }

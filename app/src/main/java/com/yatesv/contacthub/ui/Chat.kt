@@ -511,7 +511,7 @@ fun ChatScreen(key: String) {
                             if (swipe.value >= replyMax * 0.6f && !swipeBuzzed) { swipeBuzzed = true; Haptics.tap(view) }
                         } else scope.launch { reveal.snapTo((reveal.value - dx * 0.6f).coerceIn(0f, maxReveal)) }
                     }
-                }, state = listState, reverseLayout = true, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
+                }, state = listState, reverseLayout = true, flingBehavior = rememberScrollFling(settings.scrollSpeed), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
                     items(reversed.size, key = { reversed[it].key }) { i ->
                         val m = reversed[i]

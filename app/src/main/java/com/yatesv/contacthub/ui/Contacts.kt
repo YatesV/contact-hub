@@ -152,7 +152,7 @@ fun ContactsScreen() {
                 leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search ${list?.size ?: ""} contacts") })
             GroupChips(groupFilter, { groupFilter = it }) { manageGroups = true }
             if (manageGroups) GroupsDialog(list.orEmpty()) { manageGroups = false }
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), flingBehavior = rememberScrollFling(Hub.settings.flow.collectAsState().value.scrollSpeed)) {
                 if (q.isBlank() && groupFilter.isBlank()) item { FriendSyncCard() }
                 if (favorites.isNotEmpty() && q.isBlank() && groupFilter.isBlank()) {
                     item { SectionTitle("Favorites") }

@@ -135,7 +135,19 @@ data class ShownReaction(val emoji: String, val fromMe: Boolean, val pending: Bo
 data class ChatData(val msgs: List<Msg>, val reactions: Map<String, List<ShownReaction>>, val threadId: Long, val hasMore: Boolean = false)
 
 /** Last loaded copy of each chat, so reopening a chat shows instantly while it refreshes. */
-object ChatCache { val map = java.util.concurrent.ConcurrentHashMap<String, ChatData>() }
+object ChatCache {
+    val map = java.util.concurrent.ConcurrentHashMap<String, ChatData>()
+    private val loading = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /** Warm a chat in the background so it opens instantly. Safe to call repeatedly; does nothing if already loaded. */
+    fun preload(key: String) {
+        if (key.isBlank() || map.containsKey(key) || !loading.add(key)) return
+        Hub.scope.launch {
+            runCatching { ChatData0.load(key) }.getOrNull()?.let { map[key] = it }
+            loading.remove(key)
+        }
+    }
+}
 
 object ChatData0 {
     /** Puts together texts from the phone's database and RCS messages, and turns "Liked …" texts into reactions. */
@@ -830,8 +842,9 @@ internal fun Bubble(
         else -> style.recv
     }
     val fg = if (m.outgoing && colorOverride == 0) style.sentText else if (!m.outgoing && memberColor == null) style.recvText else onColor(bg)
-    val emojiOnly = m.attachments.isEmpty() && isOnlyEmoji(m.body)
-    val otp = if (!m.outgoing) Otp.find(m.body) else null
+    // Memoized so they don't re-run on every frame while the chat scrolls
+    val emojiOnly = remember(m.body, m.attachments.size) { m.attachments.isEmpty() && isOnlyEmoji(m.body) }
+    val otp = remember(m.body, m.outgoing) { if (!m.outgoing) Otp.find(m.body) else null }
 
     Column(
         Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = if (first) 6.dp else 1.dp, bottom = if (reactions.isNotEmpty()) 12.dp else 1.dp),

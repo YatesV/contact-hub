@@ -87,13 +87,18 @@ class HubApp : Application() {
         Hub.contacts = ContactsRepo(this)
         Hub.l360 = Life360(this)
         Hub.orbit = com.yatesv.contacthub.data.OrbitStore(this)
-        Configuration.getInstance().userAgentValue = packageName
+        // Notification channels are cheap and need to exist before anything posts, so they stay here.
         Notifier.createChannels(this)
         com.yatesv.contacthub.engine.MockService.createChannel(this)
         com.yatesv.contacthub.engine.OrbitNotes.channel(this)
-        runCatching { com.yatesv.contacthub.engine.DailyWorker.schedule(this) }
-        runCatching { scheduleWork(this) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
-        Hub.scope.launch { runCatching { Hub.contacts.all() } }
+        // The heavy, first-screen-doesn't-need-it work waits until just after launch, so the app opens faster:
+        // the map's user agent (osmdroid) and WorkManager scheduling, which is slow to spin up on a cold start.
+        Hub.scope.launch {
+            runCatching { Configuration.getInstance().userAgentValue = packageName }
+            runCatching { com.yatesv.contacthub.engine.DailyWorker.schedule(this@HubApp) }
+            runCatching { scheduleWork(this@HubApp) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
+            runCatching { Hub.contacts.all() }
+        }
     }
 
     companion object {

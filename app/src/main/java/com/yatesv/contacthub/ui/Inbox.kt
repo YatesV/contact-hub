@@ -219,6 +219,8 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val pinned = if (mode == InboxMode.NORMAL && filter == "all") visible.filter { it.meta.pinned } else emptyList()
     val list = visible.filter { it !in pinned }
+    // Warm the chats you're most likely to open so they come up instantly
+    LaunchedEffect(mode) { (pinned + list).take(6).forEach { ChatCache.preload(it.key) } }
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
@@ -287,7 +289,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                         }
                     }
                     if (pinned.isNotEmpty()) item(key = "pinned") {
-                        PinnedGrid(pinned, onOpen = { Nav.go(Screen.Chat(it.key)) }, onLong = { Haptics.long(view); actionsFor = it })
+                        PinnedGrid(pinned, onOpen = { ChatCache.preload(it.key); Nav.go(Screen.Chat(it.key)) }, onLong = { Haptics.long(view); actionsFor = it })
                     }
                     if (list.isEmpty() && pinned.isEmpty()) item(key = "empty") {
                         EmptyState(Icons.Default.ChatBubbleOutline, "Nothing here", when (mode) {
@@ -299,7 +301,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                     items(list, key = { it.key }) { r ->
                         Box(Modifier.animateItem(fadeInSpec = Motion.spec(), fadeOutSpec = Motion.spec(), placementSpec = Motion.spec())) {
                           SwipeRow(r, settings.swipeLeft, settings.swipeRight) {
-                            ConvItem(r, onClick = { Nav.go(Screen.Chat(r.key)) }, onLong = { Haptics.long(view); actionsFor = r })
+                            ConvItem(r, onClick = { ChatCache.preload(r.key); Nav.go(Screen.Chat(r.key)) }, onLong = { Haptics.long(view); actionsFor = r })
                         } }
                     }
                     item { Spacer(Modifier.height(24.dp)) }

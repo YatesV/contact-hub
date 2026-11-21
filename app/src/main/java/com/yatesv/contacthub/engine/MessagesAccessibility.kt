@@ -272,7 +272,7 @@ class MessagesAccessibility : AccessibilityService() {
         returnToOrbit = AppState.foreground
         val want = norm(body)
         val how = method(forced)
-        delay(150)              // let the faded "sending" bubble appear first, so it's in the snapshot
+        delay(80)               // let the faded "sending" bubble appear first, so it's in the snapshot
         val covered = when (how) {
             "mirror" -> showMirror(convKey) || showCover()
             "snapshot", "popup" -> showCover()
@@ -304,7 +304,8 @@ class MessagesAccessibility : AccessibilityService() {
             // 1. Wait for the chat to open with our text in the box, and for Send to be tappable
             var send: AccessibilityNodeInfo? = null
             while (System.currentTimeMillis() - start < 9000) {
-                delay(200)
+                // Poll fast at first (the chat usually opens in a few hundred ms), then back off to save battery
+                delay(if (System.currentTimeMillis() - start < 1500) 50 else 150)
                 val r = root(pkg) ?: continue
                 val nodes = all(r)
                 val input = findInput(nodes)
@@ -342,7 +343,8 @@ class MessagesAccessibility : AccessibilityService() {
             send.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             val t0 = System.currentTimeMillis()
             while (System.currentTimeMillis() - t0 < 6000) {
-                delay(200)
+                // Confirm the send landed as soon as the box clears, so the bubble fills in quickly
+                delay(if (System.currentTimeMillis() - t0 < 1200) 50 else 150)
                 val input = chatInput(pkg) ?: continue          // popup on top (SIM picker, "send as MMS?"): keep waiting
                 val left = norm(inputText(input))
                 val cleared = if (media.isEmpty()) left != want && left.isEmpty() else left.isEmpty() && System.currentTimeMillis() - t0 > 1500

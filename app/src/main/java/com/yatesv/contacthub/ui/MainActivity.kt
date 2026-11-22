@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import com.yatesv.contacthub.Hub
@@ -236,13 +237,17 @@ fun AppRoot() {
     AppOpenFold(enabled = s.transition == "fold" && Motion.enabled(s), intensity = s.foldIntensity) {
     androidx.compose.animation.SharedTransitionLayout(Modifier.fillMaxSize()) {
     val shared = this
+    // Photos only start flying once this layout has been placed at least once. Before that it has no
+    // position yet, and a flying photo asking for it crashes the app. That happened when a notification
+    // opened a chat on a fresh start: the inbox row and the chat header matched in the very first frame.
+    var sharedReady by androidx.compose.runtime.remember { mutableStateOf(false) }
     AnimatedContent(
         targetState = Nav.top,
         transitionSpec = { screenTransition(s, Nav.forward) },
         label = "screens",
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onPlaced { if (!sharedReady) sharedReady = true },
     ) { top ->
-        androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides shared, LocalScreenScope provides this) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides (if (sharedReady) shared else null), LocalScreenScope provides this) {
         val foldMod = if (s.transition == "fold" && Motion.enabled(s)) Modifier.foldScreen(this, Nav.forward, s.foldIntensity) else Modifier
         Box(Modifier.fillMaxSize().then(foldMod).background(MaterialTheme.colorScheme.background)) {
         when (top) {

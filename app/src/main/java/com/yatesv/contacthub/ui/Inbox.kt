@@ -270,7 +270,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
             }
             when {
                 rows == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.material3.CircularProgressIndicator() }
-                else -> LazyColumn(Modifier.fillMaxSize(), flingBehavior = rememberScrollFling(settings.scrollSpeed)) {
+                else -> { val sp = rememberSpeedScroll(settings.scrollSpeed); LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
                     if (mode == InboxMode.NORMAL) item(key = "search") { SearchPill { Nav.go(Screen.Search) } }
                     if (mode == InboxMode.NORMAL && settings.showCategories) item(key = "chips") {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
@@ -306,7 +306,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                         } }
                     }
                     item { Spacer(Modifier.height(24.dp)) }
-                }
+                } }
             }
         }
     }

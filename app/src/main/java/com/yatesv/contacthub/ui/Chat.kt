@@ -482,7 +482,8 @@ fun ChatScreen(key: String) {
                 val lastOutKey = msgs.lastOrNull { it.outgoing }?.key
                 val replyMax = maxReveal * 1.3f
                 val liveMsgs by androidx.compose.runtime.rememberUpdatedState(msgs)
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
+                val sp = rememberSpeedScroll(settings.scrollSpeed, reverseLayout = true, state = listState)
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().then(sp.modifier).pointerInput(Unit) {
                     // Drag left: peek at times. Drag a message right: reply to it.
                     var target: String? = null
                     var total = 0f
@@ -511,7 +512,7 @@ fun ChatScreen(key: String) {
                             if (swipe.value >= replyMax * 0.6f && !swipeBuzzed) { swipeBuzzed = true; Haptics.tap(view) }
                         } else scope.launch { reveal.snapTo((reveal.value - dx * 0.6f).coerceIn(0f, maxReveal)) }
                     }
-                }, state = listState, reverseLayout = true, flingBehavior = rememberScrollFling(settings.scrollSpeed), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
+                }, state = listState, reverseLayout = true, userScrollEnabled = sp.native, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
                     items(reversed.size, key = { reversed[it].key }) { i ->
                         val m = reversed[i]

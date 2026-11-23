@@ -119,8 +119,8 @@ fun MotionPage() {
         upd { it.copy(foldIntensity = v) }; replay++
     }
     ChoiceRow("Long-press menu", listOf("ios" to "iOS (lift + blur)", "sheet" to "Bottom sheet"), s.menuStyle) { v -> upd { it.copy(menuStyle = v) } }
-    SliderRow("Scroll speed", s.scrollSpeed, 1f..2.6f,
-        when { s.scrollSpeed <= 1.05f -> "Normal"; s.scrollSpeed >= 2.4f -> "Fastest"; else -> "%.1f×".format(s.scrollSpeed) }) { v ->
+    SliderRow("Scroll speed (page moves further than your finger)", s.scrollSpeed, 1f..3f,
+        when { s.scrollSpeed <= 1.05f -> "Normal"; s.scrollSpeed >= 2.85f -> "Fastest"; else -> "%.1f×".format(s.scrollSpeed) }) { v ->
         upd { it.copy(scrollSpeed = v) }
     }
     SectionTitle("Extras")

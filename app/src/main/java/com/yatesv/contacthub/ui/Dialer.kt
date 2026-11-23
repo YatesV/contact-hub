@@ -133,7 +133,8 @@ private fun RecentsTab() {
     var options by remember { mutableStateOf<CallEntry?>(null) }
     LaunchedEffect(version) { calls = Hub.contacts.calls() }
     if (calls?.isEmpty() == true) EmptyState(Icons.Default.Phone, "No recent calls", "Calls you make and get will show here.")
-    LazyColumn(Modifier.fillMaxSize(), flingBehavior = rememberScrollFling(Hub.settings.flow.collectAsState().value.scrollSpeed)) {
+    val sp = rememberSpeedScroll(Hub.settings.flow.collectAsState().value.scrollSpeed)
+    LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
         items(calls.orEmpty(), key = { it.id }) { c ->
             CallRow(c, onClick = { CallManager.place(ctx, c.number) }, onLong = { options = c })
         }

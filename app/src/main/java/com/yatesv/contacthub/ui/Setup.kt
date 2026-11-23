@@ -360,7 +360,7 @@ private fun Welcome(hubMode: Boolean, onMode: (Boolean) -> Unit) {
     Text("Texts, contacts, calls, socials and Life360 in one place. Setup takes about a minute. Pick how texting works (the first one is best for most people):",
         Modifier.padding(vertical = 12.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
     ModeCard("Google Messages mode", "Recommended",
-        "Keeps RCS: typing dots, read receipts, HD photos, reactions. Google Messages stays installed and does the sending in the background.",
+        "Keeps RCS: HD photos, reactions and replies. Google Messages stays installed and does the sending in the background.",
         !hubMode) { onMode(false) }
     ModeCard("Orbit mode", null,
         "Orbit is your texting app and does everything itself. Most reliable, but plain SMS/MMS only (no RCS).",
@@ -386,41 +386,7 @@ private fun ModeCard(title: String, badge: String?, body: String, selected: Bool
     }
 }
 
-@Composable
-private fun StepPage(title: String, body: String, done: Boolean, picture: @Composable () -> Unit, actions: @Composable () -> Unit) {
-    Spacer(Modifier.height(8.dp))
-    Box(contentAlignment = Alignment.Center) {
-        picture()
-        androidx.compose.animation.AnimatedVisibility(done, enter = scaleIn(Motion.popSpec()) + fadeIn()) {
-            Box(Modifier.size(96.dp).clip(CircleShape).background(Color(0xFF34C759)), contentAlignment = Alignment.Center) {
-                Text("✓", color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-    Spacer(Modifier.height(20.dp))
-    Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
-    Text(if (done) "Done! Moving on…" else body, Modifier.padding(vertical = 10.dp), textAlign = TextAlign.Center,
-        color = if (done) Color(0xFF34C759) else MaterialTheme.colorScheme.onSurfaceVariant)
-    if (!done) Column(horizontalAlignment = Alignment.CenterHorizontally) { actions() }
-}
 
-/** Samsung blocks these switches for apps installed from a file until you unlock them. */
-@Composable
-private fun RestrictedHelp(ctx: Context) {
-    var open by remember { mutableStateOf(false) }
-    TextButton({ open = !open }) { Text(if (open) "Hide help" else "Switch is greyed out / says \"Restricted setting\"?") }
-    if (open) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp)) {
-        Text("That's normal for apps installed from a file. To unlock it:", fontWeight = FontWeight.SemiBold)
-        Text("1. Tap the switch once so Android shows \"Restricted setting\", then tap OK. (Already did this for text permissions? Skip to 4.)\n" +
-            "2. Tap Unlock below. It opens Orbit's App info.\n" +
-            "3. Tap ⋮ in the top right → Allow restricted settings → confirm with your fingerprint/PIN.\n" +
-            "4. Come back here and tap Open again. The switch works now.",
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 8.dp))
-        PhoneMock(listOf("App info", "Orbit"), menu = true)
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton({ openAppInfo(ctx) }, Modifier.fillMaxWidth()) { Text("Unlock") }
-    }
-}
 
 @Composable
 private fun AccountsStep(openLife360: () -> Unit, openFriends: (com.yatesv.contacthub.data.Social) -> Unit = {}) {

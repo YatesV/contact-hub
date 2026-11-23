@@ -10,7 +10,12 @@ object Phone {
         if (s.isEmpty()) return ""
         if (s.any { it.isLetter() } && !s.startsWith("tel:")) return s.lowercase().filter { it.isLetterOrDigit() }
         val digits = s.filter { it.isDigit() }
-        return if (digits.length > 10) digits.takeLast(10) else digits
+        if (digits.length <= 10) return digits
+        // US/Canada with the leading 1: same 10-digit key as before
+        if (digits.length == 11 && digits.startsWith("1")) return digits.takeLast(10)
+        // Anything else is international: keep every digit (cutting to 10 texted the wrong number)
+        val intl = if (s.startsWith("011")) digits.drop(3) else if (s.startsWith("00")) digits.drop(2) else digits
+        return "+$intl"
     }
 
     /** Stable key for a conversation: its numbers, normalized and sorted. */
@@ -18,6 +23,19 @@ object Phone {
         addresses.map { norm(it) }.filter { it.isNotEmpty() }.distinct().sorted().joinToString(",")
 
     fun isGroupKey(key: String) = key.contains(',') || key.startsWith("g:")
+
+    /**
+     * Keys with no phone numbers, only a name from the notification:
+     *  "g:Family"  = a group,  "n:~Brad T" = one person whose number Orbit doesn't know yet.
+     * Same-named chats get a "#sc…" suffix so two "Family" groups never share a thread.
+     */
+    fun isNameKey(key: String) = key.startsWith("g:") || key.startsWith("n:")
+
+    /** The name to show for a name key ("g:Family#sc1a2b" -> "Family"). */
+    fun nameOf(key: String) = key.drop(2).replace(Regex("#sc[0-9a-f]+$"), "")
+
+    /** Phone numbers in a key (none for name keys). */
+    fun addresses(key: String): List<String> = if (isNameKey(key)) emptyList() else key.split(',').filter { it.isNotBlank() }
 
     fun pretty(raw: String): String {
         val d = norm(raw)

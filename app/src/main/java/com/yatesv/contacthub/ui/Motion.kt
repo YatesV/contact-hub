@@ -328,15 +328,5 @@ fun SpringGraph(p: Motion.SpringParams?, color: Color, grid: Color, modifier: Mo
     }
 }
 
-/** Animates 0 -> 1 with the current spring whenever [key] changes; used for live previews. */
-@Composable
-fun rememberSpringProgress(key: Any, s: Settings): Float {
-    val a = remember { Animatable(0f) }
-    LaunchedEffect(key, s.motion, s.springDamping, s.springStiffness) {
-        a.snapTo(0f)
-        a.animateTo(1f, Motion.spec(s))
-    }
-    return a.value
-}
 
 @Suppress("unused") private val keepSpring = Spring.DampingRatioNoBouncy

@@ -290,7 +290,7 @@ private fun MessagingPage() {
                 "Test them in Settings → Developer.",
             Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    Text("Stealth rule: nothing Orbit sends looks different from your normal Messages app. No branding, no duplicate texts, reactions and edits only over RCS, and group names/photos stay on your phone.",
+    Text("Stealth rule: nothing Orbit sends looks different from your normal Messages app. No branding, no duplicate texts, reactions and replies only over RCS (never \"Liked…\" or \"> quote\" texts), and group names/photos stay on your phone.",
         Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionTitle("Reactions")
     SwitchRow("Turn \"Liked …\" texts into reactions", "When iPhone or SMS contacts react, show a real reaction instead of the text", s.convertReactions) { v -> set { it.copy(convertReactions = v) } }
@@ -387,7 +387,7 @@ private fun Life360Page() {
 
     Text("Life360 has no official way for other apps to connect. Orbit uses the same unofficial connection Home Assistant uses, so it can break if Life360 changes things. The Open Life360 button always works. Your login stays on this phone.",
         Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    if (status.isNotBlank()) Banner(status) {}
+    if (status.isNotBlank()) Banner(status)
     if (s.l360Token.isNotBlank()) {
         SettingRow("Signed in", "${members.size} people · last update ${if (Hub.l360.lastSync == 0L) "never" else com.yatesv.contacthub.data.Geo.ago(Hub.l360.lastSync)}") {
             TextButton({ scope.launch { busy = true; Hub.l360.refresh(s.l360Token); busy = false } }, enabled = !busy) { Text("Refresh") }
@@ -465,7 +465,7 @@ private fun BackupPage() {
         export.launch("contacthub-backup.json")
     })
     SettingRow("Restore from file…", "Brings back your socials, notes, settings, folders, reactions and RCS history", onClick = { restore.launch(arrayOf("application/json", "*/*")) })
-    Text("Backups include a copy of your texts. Texts themselves stay in your phone's messages, which Google Messages already backs up.",
+    Text("Backups include Orbit's settings, chats' RCS text, reactions, stars, scheduled texts and a copy of your SMS texts (put back when Orbit is your default texting app). Photos and videos aren't included. A daily copy is also saved in Downloads/Orbit, which stays even if Orbit is uninstalled.",
         Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (msg.isNotBlank()) Text(msg, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.primary)
 }
@@ -474,9 +474,10 @@ private fun BackupPage() {
 private fun AboutPage() {
     UpdateCard()
     HorizontalDivider()
-    SettingRow("How RCS works here", "Google Messages stays your default texting app. Orbit sends through its reply button or taps Send in it for you, so everything really comes from Google Messages. If that fails for a 1-on-1 chat, it sends a normal SMS. Group texts are never split into separate texts.")
+    SettingRow("How RCS works here", "Google Messages stays your default texting app. Orbit sends through its reply button or taps Send in it for you, so everything really comes from Google Messages. If that fails while you're using Orbit, a 1-on-1 chat gets a normal SMS (you're told). From the background (schedules, notification replies, locked phone) it never falls back: the message waits and goes over RCS when you unlock or open Orbit. Group texts are never split into separate texts.")
     SettingRow("Reactions", "Only sent over RCS. If a chat is on SMS, your reaction waits on your phone (🕓) and sends once RCS is back. Never sent as a \"Liked…\" text.")
     SettingRow("What can break", "Google/Samsung Messages updates can break the RCS sender, and Life360 changes can break live location. The rest of the app keeps working, and a banner tells you.")
-    SettingRow("Not in this version", "Call recording (Android blocks other apps from recording the other person), visual voicemail, and the unified Instagram/Snapchat inbox (planned).")
+    SettingRow("Call recording", "Records the call through the microphone, so the other person is only clear on speaker (Android blocks apps from recording the call line). Settings → Call recordings.")
+    SettingRow("Not in this version", "Visual voicemail, and the unified Instagram/Snapchat inbox (planned).")
     SettingRow("Two modes", "Google Messages mode keeps RCS. Orbit mode makes Orbit your texting app (SMS/MMS only). Switch in Settings → Messaging.")
 }

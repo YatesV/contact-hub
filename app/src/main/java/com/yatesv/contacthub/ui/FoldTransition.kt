@@ -107,10 +107,12 @@ fun Modifier.recedeBehind(active: Boolean, intensity: Float): Modifier {
 /** One-shot fold when Orbit itself opens: the whole app tilts in from folded to flat. */
 @Composable
 fun AppOpenFold(enabled: Boolean, intensity: Float, content: @Composable () -> Unit) {
-    if (!enabled) { content(); return }
-    val anim = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { anim.animateTo(1f, tween(FOLD_DURATION_MS + 80, easing = FastOutSlowInEasing)) }
+    // Always the same tree shape (Box{content}) so toggling the setting never rebuilds the app's
+    // screen stack and shared-transition root.
+    val anim = remember { Animatable(if (enabled) 0f else 1f) }
+    LaunchedEffect(Unit) { if (enabled) anim.animateTo(1f, tween(FOLD_DURATION_MS + 80, easing = FastOutSlowInEasing)) }
     Box(Modifier.fillMaxSize().graphicsLayer {
+        if (!enabled || anim.value >= 1f) return@graphicsLayer
         val frame = foldFrame(anim.value, forward = true, entering = true, intensity = intensity)
         cameraDistance = 14f * density
         rotationY = frame.rotationY

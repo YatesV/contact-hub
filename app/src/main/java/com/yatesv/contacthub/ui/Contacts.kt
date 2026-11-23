@@ -216,8 +216,8 @@ fun ContactScreen(number: String) {
         birthday = contact?.let { Hub.contacts.birthday(it.id) }
         calls = Hub.contacts.calls(number)
         val thread = Hub.sms.threadIdFor(Phone.convKey(listOf(number)))
-        media = Hub.sms.media(thread)
-        val (count, days) = Hub.sms.statsFor(thread)
+        media = runCatching { Hub.sms.media(thread) }.getOrDefault(media)
+        val (count, days) = runCatching { Hub.sms.statsFor(thread) }.getOrElse { com.yatesv.contacthub.data.HubLog.w("Contact", "stats failed", it); 0 to emptySet() }
         val tz = java.util.TimeZone.getDefault()
         val now = System.currentTimeMillis()
         msgCount = count + dao.local(Phone.convKey(listOf(number))).size

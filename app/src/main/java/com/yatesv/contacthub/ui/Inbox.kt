@@ -110,7 +110,7 @@ object InboxData {
     fun nameFor(key: String, addresses: List<String>, meta: ConvMeta?, groupName: String?): String {
         if (!groupName.isNullOrBlank()) return groupName
         if (!meta?.customName.isNullOrBlank()) return meta!!.customName
-        if (key.startsWith("g:")) return key.removePrefix("g:")
+        if (Phone.isNameKey(key)) return Phone.nameOf(key)
         val list = addresses.ifEmpty { key.split(',') }
         return list.joinToString(", ") { a -> Hub.contacts.cached(a)?.name?.let { if (list.size > 1) it.substringBefore(' ') else it } ?: Phone.pretty(a) }
     }
@@ -159,7 +159,7 @@ object InboxData {
         for ((key, list) in locals) {
             if (key in seen) continue
             val last = list.last()
-            rows += row(key, 0, if (key.startsWith("g:")) emptyList() else key.split(','), last.body, last.date, 0)
+            rows += row(key, 0, Phone.addresses(key), last.body, last.date, 0)
         }
         return rows.sortedWith(compareByDescending<ConvRow> { it.meta.pinned }.thenByDescending { it.date })
     }
@@ -264,9 +264,12 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         Column(Modifier.padding(pad).fillMaxSize().recedeBehind(actionsFor != null || snoozeFor != null || folderFor != null, settings.foldIntensity)) {
             if (mode == InboxMode.NORMAL) UpdateBanner()
             androidx.compose.animation.AnimatedVisibility(banner.isNotBlank()) { Banner(banner) { Hub.banner.value = "" } }
-            if (l360Status.isNotBlank() && mode == InboxMode.NORMAL) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) {}
-            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected && !com.yatesv.contacthub.engine.HubSms.isDefault(ctx)) {
-                Banner("Turn on notification access so RCS chats and replies work.", "Open", { openListener(ctx) }) { Hub.banner.value = "" }
+            // ✕ hides these until the message changes / Orbit restarts
+            var l360Closed by remember(l360Status) { mutableStateOf(false) }
+            if (l360Status.isNotBlank() && mode == InboxMode.NORMAL && !l360Closed) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) { l360Closed = true }
+            var listenerClosed by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected && !com.yatesv.contacthub.engine.HubSms.isDefault(ctx) && !listenerClosed) {
+                Banner("Turn on notification access so RCS chats and replies work.", "Open", { openListener(ctx) }) { listenerClosed = true }
             }
             when {
                 rows == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.material3.CircularProgressIndicator() }
@@ -560,9 +563,10 @@ fun SearchScreen() {
     LaunchedEffect(q) {
         if (q.length < 2) { hits = emptyList(); return@LaunchedEffect }
         kotlinx.coroutines.delay(250)
-        val sms = runCatching { Hub.sms.search(q) }.getOrDefault(emptyList()).map { Triple(Phone.convKey(listOf(it.address)), it.address, it.msg) }
+        // Texts, group/picture-message text, and RCS messages Orbit saw
+        val sms = runCatching { Hub.sms.search(q) }.getOrDefault(emptyList()).map { Triple(it.key.ifBlank { Phone.convKey(listOf(it.address)) }, it.address, it.msg) }
         val local = Hub.db.dao().allLocal().filter { it.body.contains(q, true) }
-            .map { Triple(it.convKey, it.convKey, com.yatesv.contacthub.data.Msg("l:${it.id}", it.body, it.date, it.outgoing)) }
+            .map { Triple(it.convKey, "", com.yatesv.contacthub.data.Msg("l:${it.id}", it.body, it.date, it.outgoing)) }
         hits = (sms + local).sortedByDescending { it.third.date }
     }
     Scaffold(topBar = {
@@ -571,9 +575,9 @@ fun SearchScreen() {
         }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
     }) { pad ->
         LazyColumn(Modifier.padding(pad)) {
-            items(hits) { (key, addr, m) ->
-                SettingRow(InboxData.nameFor(key, listOf(addr), null, null), "${if (m.outgoing) "You: " else ""}${m.body}",
-                    onClick = { Nav.go(Screen.Chat(key)) }) { Text(shortTime(m.date), style = MaterialTheme.typography.labelSmall) }
+            items(hits, key = { it.first + "|" + it.third.key }) { (key, _, m) ->
+                SettingRow(InboxData.nameFor(key, Phone.addresses(key), null, null), "${if (m.outgoing) "You: " else ""}${m.body}",
+                    onClick = { Nav.openAt(key, m.key, m.body, m.date) }) { Text(shortTime(m.date), style = MaterialTheme.typography.labelSmall) }
             }
         }
     }
@@ -589,8 +593,8 @@ fun StarredScreen() {
     }) { pad ->
         if (starred.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Star, "No starred messages", "Long-press a message and tap Star.") }
         LazyColumn(Modifier.padding(pad)) {
-            items(starred) { s ->
-                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null), s.body, onClick = { Nav.go(Screen.Chat(s.convKey)) }) {
+            items(starred, key = { it.msgKey }) { s ->
+                SettingRow(InboxData.nameFor(s.convKey, Phone.addresses(s.convKey), null, null), s.body, onClick = { Nav.openAt(s.convKey, s.msgKey, s.body, s.date) }) {
                     TextButton({ scope.launch { Hub.db.dao().unstar(s.msgKey) } }) { Text("Unstar") }
                 }
             }
@@ -606,15 +610,42 @@ fun ScheduledScreen() {
     Scaffold(topBar = {
         TopAppBar(title = { Text("Scheduled") }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
     }) { pad ->
-        if (list.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Schedule, "Nothing scheduled", "In a chat, tap the clock next to Send.") }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var editing by remember { mutableStateOf<com.yatesv.contacthub.data.Scheduled?>(null) }
+        if (list.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Schedule, "Nothing scheduled", "In a chat, type a message, tap +, then Schedule message.") }
         LazyColumn(Modifier.padding(pad)) {
-            items(list) { s ->
-                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null),
+            items(list, key = { it.id }) { s ->
+                SettingRow(InboxData.nameFor(s.convKey, Phone.addresses(s.convKey), null, null),
                     "${fullTime(s.sendAt)}" + Hub.orbit.repeatOf(s.id).let { r -> if (r.isBlank()) "" else " · ${com.yatesv.contacthub.data.Recurring.label(r).lowercase()}" } + "\n${s.body}",
-                    onClick = { Nav.go(Screen.Chat(s.convKey)) }) {
+                    onClick = { editing = s }) {
                     TextButton({ scope.launch { Hub.db.dao().deleteScheduled(s.id); Hub.orbit.setRepeat(s.id, "") } }) { Text("Cancel") }
                 }
             }
+        }
+        editing?.let { s ->
+            var body by remember(s.id) { mutableStateOf(s.body) }
+            AlertDialog(
+                onDismissRequest = { editing = null },
+                title = { Text("Scheduled for ${fullTime(s.sendAt)}") },
+                text = { OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth(), label = { Text("Message") }) },
+                confirmButton = { Row {
+                    TextButton({
+                        editing = null
+                        scope.launch {
+                            val dao = Hub.db.dao()
+                            if (dao.claimScheduled(s.id) == 0) return@launch   // already going out
+                            com.yatesv.contacthub.engine.SendQueue.add(ctx, s.convKey, body, addresses = s.addresses.split(',').filter { it.isNotBlank() })
+                            dao.setScheduled(s.id, "sent")
+                            runCatching { com.yatesv.contacthub.engine.RecurringTexts.afterSent(s.copy(body = body)) }
+                        }
+                    }, enabled = body.isNotBlank()) { Text("Send now") }
+                    TextButton({
+                        editing = null
+                        scope.launch { Hub.db.dao().updateScheduledBody(s.id, body.trim()) }
+                    }, enabled = body.isNotBlank() && body != s.body) { Text("Save") }
+                } },
+                dismissButton = { TextButton({ editing = null; Nav.go(Screen.Chat(s.convKey)) }) { Text("Open chat") } },
+            )
         }
     }
 }

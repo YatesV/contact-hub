@@ -151,14 +151,18 @@ object ChatCache {
 
 object ChatData0 {
     /** Puts together texts from the phone's database and RCS messages, and turns "Liked …" texts into reactions. */
-    suspend fun load(key: String, limit: Int = 80): ChatData {
+    suspend fun load(key: String, limit: Int = 80): ChatData = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { load0(key, limit) }
+
+    private suspend fun load0(key: String, limit: Int): ChatData {
         val dao = Hub.db.dao()
         val thread = Hub.sms.threadIdFor(key)
         val provider = Hub.sms.messages(thread, limit, group = Phone.isGroupKey(key))
         val locals = dao.local(key)
         val merged = ArrayList(provider)
+        // Same text, same direction, within 3 minutes = the same message seen twice
+        val byBody = provider.groupBy({ it.outgoing to it.body.trim() }, { it.date })
         for (l in locals) {
-            val dup = provider.any { p -> p.outgoing == l.outgoing && p.body.trim() == l.body.trim() && kotlin.math.abs(p.date - l.date) < 180_000 }
+            val dup = byBody[l.outgoing to l.body.trim()]?.any { kotlin.math.abs(it - l.date) < 180_000 } == true
             if (!dup) merged += Msg("l:${l.id}", l.body, l.date, l.outgoing, l.sender,
                 attachments = com.yatesv.contacthub.data.IncomingMedia.forMessage(Hub.app, "l:${l.id}"), rcs = true,
                 status = if (l.source == "failed") 2 else 0)
@@ -193,7 +197,7 @@ object ChatData0 {
 }
 
 private suspend fun com.yatesv.contacthub.data.HubDao.reactionsFlowOnce(key: String): List<Reaction> =
-    allReactions().filter { it.convKey == key }
+    reactionsFor(key)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -242,7 +246,7 @@ fun ChatScreen(key: String) {
     val queue by com.yatesv.contacthub.engine.SendQueue.items.collectAsState()
     var failedTap by remember { mutableStateOf<com.yatesv.contacthub.engine.SendQueue.Item?>(null) }
     /** Where each bubble is on screen, for the iOS-style long-press menu. */
-    val bounds = remember { androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
+    val bounds = remember { HashMap<String, androidx.compose.ui.geometry.Rect>() }   // plain map: read only when the menu opens, so no recomposition per scroll frame
     /** Messages already on screen when the chat opened (no entrance animation for those). */
     val seen = remember(key) { HashSet<String>() }
     var initialDone by remember(key) { mutableStateOf(false) }
@@ -270,7 +274,9 @@ fun ChatScreen(key: String) {
         group = dao.allGroups().firstOrNull { it.convKey == key }
         extras = dao.allExtras().associateBy { it.phoneKey }
         if (data != null) kotlinx.coroutines.delay(150)   // coalesce bursts of updates
-        val fresh = runCatching { ChatData0.load(key, limit) }.getOrElse { HubLog.w("Chat", "load failed", it); null }
+        val fresh = try { ChatData0.load(key, limit) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }   // left the chat: not a failure
+            catch (e: Exception) { HubLog.w("Chat", "load failed", e); null }
         if (fresh != null) { data = fresh; ChatCache.map[key] = fresh }
         else if (data == null) data = ChatData(emptyList(), emptyMap(), 0)
     }
@@ -287,15 +293,12 @@ fun ChatScreen(key: String) {
     /** Sends files with whatever is typed as the caption, then scrolls to the bottom. */
     fun sendFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
-        val caption = replyTo?.takeIf { text.isNotBlank() }?.let { com.yatesv.contacthub.data.Quote.make(it.body, text) } ?: text
+        val caption = text
         replyTo = null
-        scope.launch {
-            snack.showSnackbar("Sending…", duration = androidx.compose.material3.SnackbarDuration.Short)
-        }
-        scope.launch {
-            val r = Sender.sendMedia(ctx, key, uris, caption)
-            if (r.ok) { text = ""; runCatching { listState.animateScrollToItem(0) } } else snack.showSnackbar(r.error)
-        }
+        text = ""
+        // Queued like texts: shows a faded bubble, retries, and survives Orbit being closed
+        com.yatesv.contacthub.engine.SendQueue.add(ctx, key, caption, uris = uris.map { it.toString() })
+        scope.launch { kotlinx.coroutines.delay(60); runCatching { listState.animateScrollToItem(0) } }
     }
     fun sendFile(f: java.io.File) = sendFiles(listOf(OutFiles.uri(ctx, f)))
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
@@ -334,7 +337,13 @@ fun ChatScreen(key: String) {
     fun reactTo(m: Msg, emoji: String) {
         Hub.scope.launch {
             val existing = dao.findReaction(key, m.key, true, emoji)
-            if (existing != null) { dao.deleteReaction(existing.id); Hub.changed(); return@launch }
+            if (existing != null) {
+                // Never sent: just forget it. Already sent: remove it in Google Messages too, so they stop seeing it.
+                val why = if (existing.pending) null else Sender.removeReaction(ctx, existing)
+                if (why == null) { dao.deleteReaction(existing.id); Hub.changed() }
+                else scope.launch { runCatching { snack.showSnackbar("Couldn't remove it in Google Messages ($why). It's still showing for them.") } }
+                return@launch
+            }
             val id = dao.addReaction(Reaction(convKey = key, msgKey = m.key, msgBody = m.body, emoji = emoji, fromMe = true, pending = true))
             Hub.changed()
             val r = Reaction(id, key, m.key, m.body, emoji, true, true)
@@ -347,7 +356,9 @@ fun ChatScreen(key: String) {
     fun send() {
         val typed = text.trim()
         if (typed.isEmpty()) return
-        val body = replyTo?.let { com.yatesv.contacthub.data.Quote.make(it.body, typed) } ?: typed
+        val body = typed
+        // A real RCS reply when possible; never a "> quote" line (people would see it came from another app)
+        val replyBody = replyTo?.body?.let { com.yatesv.contacthub.data.Quote.split(it).second.ifBlank { it } }
         replyTo = null
         text = ""
         // Slide down so what you sent isn't hidden under the keyboard
@@ -356,7 +367,7 @@ fun ChatScreen(key: String) {
         SendSound.play()
         Effects.trigger(body)
         // Queued: sends in the background, in order. You can keep typing and sending.
-        com.yatesv.contacthub.engine.SendQueue.add(ctx, key, body)
+        com.yatesv.contacthub.engine.SendQueue.add(ctx, key, body, replyTo = replyBody)
         if (typing) runCatching { focus.requestFocus() }
     }
     // Keyboard back after Google Messages was used to send (it can close it); buzz if one failed
@@ -437,9 +448,22 @@ fun ChatScreen(key: String) {
                 // Your queued messages show faded (or red if they failed) until the real one appears
                 val waiting = queue.filter { q -> q.key == key && real.none { it.outgoing && it.body.trim() == q.body && it.date >= q.created - 60_000 } }
                     .filterNot { it.state == "sent" && System.currentTimeMillis() - it.sentAt > 15_000 }
-                    .map { q -> Msg("q:${q.id}", q.body, q.created, true, status = if (q.state == "failed") 2 else 1) }
+                    .map { q -> Msg("q:${q.id}", q.body.ifBlank { if (q.uris.isNotEmpty()) "📎 ${q.uris.size} attachment${if (q.uris.size > 1) "s" else ""}" else "" },
+                        q.created, true, status = when (q.state) { "failed" -> 2; "unconfirmed" -> 3; "held" -> 4; else -> 1 }) }
                 val justSent = queue.filter { it.key == key && it.state == "sent" }.map { it.body }.toSet()
                 val msgs = real + waiting
+                // Opened from Search / Starred: scroll to that message (loading older ones until it's found)
+                LaunchedEffect(data) {
+                    val j = Nav.jumps[key] ?: return@LaunchedEffect
+                    val rev = msgs.asReversed()
+                    val idx = rev.indexOfFirst { it.key == j.msgKey }.takeIf { it >= 0 }
+                        ?: rev.indexOfFirst { it.body.trim() == j.body.trim() && kotlin.math.abs(it.date - j.date) < 120_000 }
+                    when {
+                        idx >= 0 -> { Nav.jumps.remove(key); runCatching { listState.scrollToItem(idx) }; showTimes = showTimes + rev[idx].key }
+                        data?.hasMore == true -> limit += 300
+                        data != null -> Nav.jumps.remove(key)
+                    }
+                }
                 /** Scrolls the chat to a message, if it's loaded. */
                 fun scrollTo(msgKey: String) {
                     val idx = msgs.asReversed().indexOfFirst { it.key == msgKey }
@@ -462,7 +486,7 @@ fun ChatScreen(key: String) {
                     onDelete = { deleteThese = msgs.filter { it.key in picked } },
                 )
                 ForwardBar(key) { f ->
-                    if (f.media.isNotEmpty()) scope.launch { val r = Sender.sendMedia(ctx, key, f.media, f.text); if (!r.ok) snack.showSnackbar(r.error) }
+                    if (f.media.isNotEmpty()) com.yatesv.contacthub.engine.SendQueue.add(ctx, key, f.text, uris = f.media.map { it.toString() })
                     else com.yatesv.contacthub.engine.SendQueue.add(ctx, key, f.text)
                     scope.launch { kotlinx.coroutines.delay(60); runCatching { listState.animateScrollToItem(0) } }
                 }
@@ -514,6 +538,7 @@ fun ChatScreen(key: String) {
                     }
                 }, state = listState, reverseLayout = true, userScrollEnabled = sp.native, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
                     val reversed = msgs.asReversed()
+                    val timeFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
                     items(reversed.size, key = { reversed[it].key }) { i ->
                         val m = reversed[i]
                         val isNew = initialDone && m.key !in seen
@@ -525,7 +550,7 @@ fun ChatScreen(key: String) {
                             .background(if (m.key in picked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)) {
                             if (older == null || !sameDay(older.date, m.date)) DateChip(m.date)
                             Box(Modifier.fillMaxWidth()) {
-                            if (reveal.value > 1f) Text(java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(m.date)),
+                            if (reveal.value > 1f) Text(timeFmt.format(java.util.Date(m.date)),
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp).graphicsLayer { alpha = reveal.value / maxReveal })
                             if (swipeKey == m.key && swipe.value > 4f) Icon(Icons.AutoMirrored.Filled.Reply, null,
@@ -544,7 +569,7 @@ fun ChatScreen(key: String) {
                                 mention = isGroup && !m.outgoing && settings.myName.isNotBlank() && m.body.contains(settings.myName, true),
                                 onClick = {
                                     if (picked.isNotEmpty()) { picked = if (m.key in picked) picked - m.key else picked + m.key }
-                                    else if (m.key.startsWith("q:") && m.status == 2) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
+                                    else if (m.key.startsWith("q:") && m.status in 2..4) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
                                     else showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key
                                 },
                                 onLong = { Haptics.long(view); if (picked.isNotEmpty()) picked = if (m.key in picked) picked - m.key else picked + m.key else selected = m },
@@ -566,11 +591,13 @@ fun ChatScreen(key: String) {
                                 when {
                                     m.status == 1 -> "Sending…"
                                     m.status == 2 -> "Not delivered · tap to retry"
+                                    m.status == 3 -> "Couldn't confirm · check Google Messages"
+                                    m.status == 4 -> "Waiting to send over RCS"
                                     chatType == "sms" || (!m.rcs && m.key.startsWith("s:")) -> "Sent as text message"
                                     else -> "Sent"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (m.status == 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (m.status == 2 || m.status == 3) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.align(Alignment.End).padding(end = 16.dp, top = 2.dp),
                             )
                         }
@@ -756,13 +783,33 @@ fun ChatScreen(key: String) {
     selectText?.let { t -> SelectTextDialog(t) { selectText = null } }
 
     failedTap?.let { f ->
-        AlertDialog(
-            onDismissRequest = { failedTap = null },
-            title = { Text("Not delivered") },
-            text = { Text(f.error.ifBlank { "This message didn't send." } + "\n\nMessages after it in this chat are waiting so they don't arrive out of order.") },
-            confirmButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.retry(f.id); failedTap = null }) { Text("Try again") } },
-            dismissButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.cancel(f.id); failedTap = null }) { Text("Delete") } },
-        )
+        when (f.state) {
+            // Send was tapped but not confirmed: retrying could send it twice
+            "unconfirmed" -> AlertDialog(
+                onDismissRequest = { failedTap = null },
+                title = { Text("Couldn't confirm it sent") },
+                text = { Text(f.error.ifBlank { "Orbit tapped Send in Google Messages but couldn't confirm it went." } +
+                    "\n\nIt may have sent. Check Google Messages before sending it again, or it could arrive twice.") },
+                confirmButton = { TextButton({
+                    runCatching { ctx.startActivity(ctx.packageManager.getLaunchIntentForPackage(com.yatesv.contacthub.engine.GOOGLE_MESSAGES)!!.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    failedTap = null }) { Text("Open Google Messages") } },
+                dismissButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.cancel(f.id); failedTap = null }) { Text("Hide") } },
+            )
+            "held" -> AlertDialog(
+                onDismissRequest = { failedTap = null },
+                title = { Text("Waiting to send over RCS") },
+                text = { Text(f.error.ifBlank { "This goes as soon as Google Messages can be reached." } + "\n\nIt will never be sent as a plain text instead.") },
+                confirmButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.wakeHeld(ctx, key, drive = true); failedTap = null }) { Text("Try now") } },
+                dismissButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.cancel(f.id); failedTap = null }) { Text("Delete") } },
+            )
+            else -> AlertDialog(
+                onDismissRequest = { failedTap = null },
+                title = { Text("Not delivered") },
+                text = { Text(f.error.ifBlank { "This message didn't send." } + "\n\nMessages after it in this chat are waiting so they don't arrive out of order.") },
+                confirmButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.retry(f.id); failedTap = null }) { Text("Try again") } },
+                dismissButton = { TextButton({ com.yatesv.contacthub.engine.SendQueue.cancel(f.id); failedTap = null }) { Text("Delete") } },
+            )
+        }
     }
 
     if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at, repeat ->
@@ -861,7 +908,7 @@ internal fun Bubble(
             Column(
                 Modifier.widthIn(max = 300.dp)
                     .onGloballyPositioned { onBounds(it.boundsInRoot()) }
-                    .graphicsLayer { alpha = if (m.status == 1 && m.key.startsWith("q:")) 0.55f else 1f }
+                    .graphicsLayer { alpha = if ((m.status == 1 || m.status == 4) && m.key.startsWith("q:")) 0.55f else 1f }
                     .clip(style.bubble(m.outgoing, first, last))
                     .then(when {
                         emojiOnly -> Modifier
@@ -959,7 +1006,7 @@ internal fun Bubble(
                 listOfNotNull(
                     if (starred) "★" else null,
                     shortTime(m.date),
-                    when (m.status) { 1 -> "Sending…"; 2 -> "Not sent"; else -> null },
+                    when (m.status) { 1 -> "Sending…"; 2 -> "Not sent"; 3 -> "Not confirmed"; 4 -> "Waiting for RCS"; else -> null },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (m.status == 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1033,15 +1080,25 @@ fun ScheduleDialog(onDismiss: () -> Unit, onPickRepeat: (Long, String) -> Unit) 
             confirmButton = { TextButton(onDismiss) { Text("Cancel") } },
         )
     } else if (pickedDay == null) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis())
+        // DatePicker works in UTC days: hand it today's *local* date (after 6 PM it used to preselect tomorrow)
+        val todayUtc = remember {
+            val l = Calendar.getInstance()
+            Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { clear(); set(l.get(Calendar.YEAR), l.get(Calendar.MONTH), l.get(Calendar.DAY_OF_MONTH)) }.timeInMillis
+        }
+        val state = rememberDatePickerState(initialSelectedDateMillis = todayUtc)
         DatePickerDialog(onDismissRequest = onDismiss, confirmButton = {
-            TextButton({ pickedDay = state.selectedDateMillis ?: System.currentTimeMillis() }) { Text("Next") }
+            TextButton({ pickedDay = state.selectedDateMillis ?: todayUtc }) { Text("Next") }
         }) { DatePicker(state) }
     } else {
         val t = rememberTimePickerState(initialHour = 9, initialMinute = 0)
+        var past by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = onDismiss,
-            text = { TimePicker(t) },
+            text = { Column {
+                if (past) Text("That time has already passed. Pick a later time.", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+                TimePicker(t)
+            } },
             confirmButton = {
                 TextButton({
                     // DatePicker gives UTC midnight; convert to the local day
@@ -1049,7 +1106,7 @@ fun ScheduleDialog(onDismiss: () -> Unit, onPickRepeat: (Long, String) -> Unit) 
                     val local = Calendar.getInstance().apply {
                         set(utc.get(Calendar.YEAR), utc.get(Calendar.MONTH), utc.get(Calendar.DAY_OF_MONTH), t.hour, t.minute, 0)
                     }
-                    onPick(local.timeInMillis)
+                    if (local.timeInMillis <= System.currentTimeMillis() + 30_000) past = true else onPick(local.timeInMillis)
                 }) { Text("Schedule") }
             },
             dismissButton = { TextButton(onDismiss) { Text("Cancel") } },

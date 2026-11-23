@@ -209,13 +209,21 @@ object Trail {
 
 object Recurring {
     val RULES = listOf("" to "Never", "daily" to "Every day", "weekly" to "Every week", "monthly" to "Every month", "yearly" to "Every year")
-    fun label(rule: String) = RULES.firstOrNull { it.first == rule }?.second ?: ""
+    fun label(rule: String) = RULES.firstOrNull { it.first == rule.substringBefore('@') }?.second ?: ""
+
+    /** "monthly" -> "monthly@31": remembers the original day so the 31st stays the 31st after a short month. */
+    fun anchored(rule: String, firstSend: Long, tz: TimeZone = TimeZone.getDefault()): String {
+        if ('@' in rule || rule !in listOf("monthly", "yearly")) return rule
+        return rule + "@" + Calendar.getInstance(tz).apply { timeInMillis = firstSend }.get(Calendar.DAY_OF_MONTH)
+    }
 
     /** Next send time after [from] (keeps the same time of day; skips times already in the past). */
     fun next(from: Long, rule: String, now: Long = System.currentTimeMillis(), tz: TimeZone = TimeZone.getDefault()): Long? {
-        val field = when (rule) { "daily" -> Calendar.DAY_OF_YEAR; "weekly" -> Calendar.WEEK_OF_YEAR; "monthly" -> Calendar.MONTH; "yearly" -> Calendar.YEAR; else -> return null }
+        val base = rule.substringBefore('@')
+        val field = when (base) { "daily" -> Calendar.DAY_OF_YEAR; "weekly" -> Calendar.WEEK_OF_YEAR; "monthly" -> Calendar.MONTH; "yearly" -> Calendar.YEAR; else -> return null }
         val c = Calendar.getInstance(tz).apply { timeInMillis = from }
-        val day = c.get(Calendar.DAY_OF_MONTH)
+        // The day it was first set for (Jan 31 -> Feb 28 -> Mar 31, not the 28th forever)
+        val day = rule.substringAfter('@', "").toIntOrNull() ?: c.get(Calendar.DAY_OF_MONTH)
         var guard = 0
         do {
             c.add(field, 1)

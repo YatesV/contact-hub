@@ -231,7 +231,7 @@ fun CallRecordingsPage() {
     val fmt = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
     val scope = rememberCoroutineScope()
 
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxWidth()) {   // SettingsPage already scrolls; a second scroll here crashed
         Text("Where they're saved", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
         Text(CallRecorder.dir(ctx).absolutePath, style = MaterialTheme.typography.bodySmall,

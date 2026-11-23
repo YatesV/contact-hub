@@ -67,9 +67,10 @@ fun DialerScreen() {
 
     Column(Modifier.fillMaxSize()) {
         Spacer(Modifier.height(36.dp))
-        if (!isDefault) Banner("Orbit isn't your default phone app yet, so it can't show its call screen or block numbers.", "Set default", {
+        var defaultClosed by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+        if (!isDefault && !defaultClosed) Banner("Orbit isn't your default phone app yet, so it can't show its call screen or block numbers.", "Set default", {
             roleLauncher.launch(ctx.getSystemService(RoleManager::class.java).createRequestRoleIntent(RoleManager.ROLE_DIALER))
-        }) {}
+        }) { defaultClosed = true }
         PrimaryTabRow(tab) {
             listOf("Keypad", "Recents", "Favorites").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
         }

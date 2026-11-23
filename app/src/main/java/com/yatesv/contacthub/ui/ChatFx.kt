@@ -31,6 +31,16 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.automirrored.filled.Forward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.HorizontalDivider
@@ -176,7 +186,7 @@ fun IosMessageMenu(
                     if (m.body.isNotBlank()) { HorizontalDivider(); MenuItem("Select text", Icons.Default.TextFields) { onSelect() } }
                     extra.forEach { (label, act) ->
                         HorizontalDivider()
-                        MenuItem(label, when { label.contains("Pin", true) -> Icons.Default.PushPin; else -> Icons.Default.Translate }) { act() }
+                        MenuItem(label, menuIcon(label)) { act() }
                     }
                     Otp.find(m.body)?.let { code -> HorizontalDivider(); MenuItem("Copy code $code", Icons.Default.Key) { onCopy(code) } }
                     HorizontalDivider()
@@ -254,5 +264,24 @@ fun ChatMirror(key: String) {
                 Box(Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(20.dp)).background(MaterialTheme.colorScheme.background))
             }
         }
+    }
+}
+
+/** The right icon for each long-press menu action (they all used to show Translate). */
+private fun menuIcon(label: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val l = label.lowercase()
+    return when {
+        "unpin" in l || "pin" in l -> Icons.Default.PushPin
+        "reply" in l -> Icons.AutoMirrored.Filled.Reply
+        "forward" in l -> Icons.AutoMirrored.Filled.Forward
+        "delete" in l || "remove" in l -> Icons.Default.Delete
+        "save" in l || "download" in l -> Icons.Default.Download
+        "open" in l -> Icons.AutoMirrored.Filled.OpenInNew
+        "share" in l -> Icons.Default.Share
+        "translate" in l -> Icons.Default.Translate
+        "select" in l -> Icons.Default.Checklist
+        "remind" in l -> Icons.Default.Alarm
+        "info" in l || "details" in l -> Icons.Default.Info
+        else -> Icons.Default.MoreHoriz
     }
 }

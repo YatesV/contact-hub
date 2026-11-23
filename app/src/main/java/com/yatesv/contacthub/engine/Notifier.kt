@@ -52,7 +52,7 @@ object Notifier {
     }
 
     fun displayName(key: String): String {
-        if (key.startsWith("g:")) return key.removePrefix("g:")
+        if (Phone.isNameKey(key)) return Phone.nameOf(key)
         return key.split(',').joinToString(", ") { Hub.contacts.cached(it)?.name ?: Phone.pretty(it) }
     }
 
@@ -121,7 +121,11 @@ object Notifier {
         runCatching { NotificationManagerCompat.from(ctx).notify(key.hashCode(), b.build()) }
     }
 
-    fun cancel(ctx: Context, key: String) = NotificationManagerCompat.from(ctx).cancel(key.hashCode())
+    /** Unread lines per chat for Orbit-mode notifications (cleared when the chat is opened or read). */
+    val recent = java.util.concurrent.ConcurrentHashMap<String, List<Pair<String, String>>>()
+
+    fun cancel(ctx: Context, key: String) { recent.remove(key); NotificationManagerCompat.from(ctx).cancel(key.hashCode()) }
+    fun cancelStatus(ctx: Context, id: Int) = NotificationManagerCompat.from(ctx).cancel(id)
 
     fun status(ctx: Context, id: Int, title: String, text: String) {
         val b = NotificationCompat.Builder(ctx, CH_STATUS).setSmallIcon(R.drawable.ic_tile)

@@ -200,5 +200,4 @@ fun memberColor(key: String, override: Int = 0): Color {
     return Color(colors[(key.hashCode() and 0x7fffffff) % colors.size])
 }
 
-@Suppress("unused")
-fun Settings.isDark(system: Boolean) = when (darkMode) { "light" -> false; "dark", "amoled" -> true; else -> system }
+

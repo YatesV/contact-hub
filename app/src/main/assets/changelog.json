@@ -3,6 +3,28 @@
   "updates": [
     {
       "build": "next",
+      "date": "2026-11-22T22:30",
+      "title": "Big bug-fix update",
+      "notes": [
+        "Fixed: Orbit closing when you open a chat from a notification (the flying-photo animation ran before the screen was ready)",
+        "Fixed: Settings → Call recordings crashing",
+        "Scroll speed now moves the page further than your finger, not just the flick (up to 3×)",
+        "Chats are matched to Google Messages' own conversation IDs: two people or groups with the same name no longer share a chat, and people without a saved number aren't treated as groups",
+        "Never falls back to SMS from the background: scheduled texts, notification replies, auto-replies and anything sent while locked wait and go over RCS when you unlock or open Orbit",
+        "Replies are real RCS replies (no more \"> quote\" lines); removing a reaction removes it for them too",
+        "Messages that may have sent are never retried automatically (no doubles); the send queue survives Orbit being closed",
+        "Photos and videos go through the send queue with a faded bubble; forwarded videos/voice notes keep their real type; big photos no longer run out of memory",
+        "Orbit mode: long texts that partly fail show as failed, picture messages can't get lost on a failed download, group texts don't include you, notifications show the last few messages",
+        "International numbers are kept whole",
+        "Backups: scheduled texts restore properly, reactions don't double, texts are put back in Orbit mode, and a daily copy is saved to Downloads/Orbit",
+        "Monthly texts on the 31st stay on the 31st; the date picker no longer jumps to tomorrow at night; scheduled texts can be edited or sent now",
+        "Search finds group and picture-message text; tapping a search result or starred message jumps to it",
+        "Archived chats come back when someone texts; correct icons in the long-press menu; dead ✕ buttons fixed",
+        "Releases are now signed with a private key"
+      ]
+    },
+    {
+      "build": 43,
       "date": "2026-11-21T00:10",
       "title": "Adjustable scroll speed",
       "notes": [

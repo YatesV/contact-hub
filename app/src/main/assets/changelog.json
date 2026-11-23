@@ -4,27 +4,7 @@
     {
       "build": "next",
       "date": "2026-11-23T00:30",
-      "title": "Photo viewer, delivery reports, bubbles and more",
-      "notes": [
-        "Photos and videos open full screen inside Orbit: swipe through the whole chat's media, pinch or double-tap to zoom, save or share",
-        "Voice messages have a seek bar and show their length, and only one plays at a time",
-        "Schedule photos and videos (+ → Schedule photos); scheduled ones can be sent now",
-        "Orbit mode: \"Delivered\" under texts once they reach the other phone, and a per-chat SIM picker on dual-SIM phones",
-        "Message details: long-press a message → Details (from/to, time, type, delivery, SIM)",
-        "Chats show in Android's Conversations section with the contact's photo, can pop out as bubbles, and one-time codes get a Copy button in the notification",
-        "Picture messages show the photo right in the notification",
-        "Big videos are shrunk to fit a text message automatically (up to about a minute)",
-        "Replies sent from a notification are checked: if Google Messages doesn't confirm, the message says so",
-        "Laptop access is encrypted (HTTPS) when the phone supports it",
-        "Recent calls: back-to-back calls are grouped, a Missed filter, and delete from history",
-        "Group chat: Add or remove people starts a new group with them",
-        "Screen readers: unread chats, filters, voice messages and message actions are labeled"
-      ]
-    },
-    {
-      "build": 44,
-      "date": "2026-11-22T22:30",
-      "title": "Big bug-fix update",
+      "title": "Big update: fixes, photo viewer, delivery reports, bubbles",
       "notes": [
         "Fixed: Orbit closing when you open a chat from a notification (the flying-photo animation ran before the screen was ready)",
         "Fixed: Settings → Call recordings crashing",
@@ -40,7 +20,20 @@
         "Monthly texts on the 31st stay on the 31st; the date picker no longer jumps to tomorrow at night; scheduled texts can be edited or sent now",
         "Search finds group and picture-message text; tapping a search result or starred message jumps to it",
         "Archived chats come back when someone texts; correct icons in the long-press menu; dead ✕ buttons fixed",
-        "Releases are now signed with a private key"
+        "Releases are now signed with a private key",
+        "Photos and videos open full screen inside Orbit: swipe through the whole chat's media, pinch or double-tap to zoom, save or share",
+        "Voice messages have a seek bar and show their length, and only one plays at a time",
+        "Schedule photos and videos (+ → Schedule photos); scheduled ones can be sent now",
+        "Orbit mode: \"Delivered\" under texts once they reach the other phone, and a per-chat SIM picker on dual-SIM phones",
+        "Message details: long-press a message → Details (from/to, time, type, delivery, SIM)",
+        "Chats show in Android's Conversations section with the contact's photo, can pop out as bubbles, and one-time codes get a Copy button in the notification",
+        "Picture messages show the photo right in the notification",
+        "Big videos are shrunk to fit a text message automatically (up to about a minute)",
+        "Replies sent from a notification are checked: if Google Messages doesn't confirm, the message says so",
+        "Laptop access is encrypted (HTTPS) when the phone supports it",
+        "Recent calls: back-to-back calls are grouped, a Missed filter, and delete from history",
+        "Group chat: Add or remove people starts a new group with them",
+        "Screen readers: unread chats, filters, voice messages and message actions are labeled"
       ]
     },
     {

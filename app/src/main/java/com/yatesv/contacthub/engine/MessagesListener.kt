@@ -176,14 +176,14 @@ class MessagesListener : NotificationListenerService() {
             if (better != known) remember(sc, better, tentative = better.contains(',') && isPartialGroup(this, better))
             return better
         }
-        var key = fresh(title, people, isGroup)
+        var key = fresh(title, people, isGroup, useLegacy = true, keepTitle = sc == null)
         // Legacy keys from before shortcut ids were used: one-on-ones keyed "g:Name" are really "n:Name"
         if (!isGroup && key.startsWith("n:")) migrateLater("g:${title}", key)
         if (sc != null) {
             // Already taken by a different conversation with the same name: give this one its own key
-            val owner = prefs.getString("claim:$key", null)
-            if (owner != null && owner != sc && Phone.isNameKey(key))
-                key = key + "#sc" + Integer.toHexString(sc.hashCode())
+            fun takenByOther(k: String) = prefs.getString("claim:$k", null).let { it != null && it != sc }
+            if (takenByOther(key) && !Phone.isNameKey(key)) key = fresh(title, people, isGroup, useLegacy = false, keepTitle = false)
+            if (takenByOther(key) && Phone.isNameKey(key)) key = key + "#sc" + Integer.toHexString(sc.hashCode())
             remember(sc, key, tentative = key.contains(',') && isPartialGroup(this, key))
         }
         return key
@@ -194,14 +194,19 @@ class MessagesListener : NotificationListenerService() {
     }
 
     /** Best key for a new conversation. */
-    private fun fresh(title: String, people: List<androidx.core.app.Person?>, isGroup: Boolean): String {
+    private fun fresh(title: String, people: List<androidx.core.app.Person?>, isGroup: Boolean, useLegacy: Boolean, keepTitle: Boolean): String {
         if (isGroup) {
-            // Old title mapping, only if it pointed at a real group (not a guess from recent senders)
-            if (title.isNotBlank()) prefs.getString("grp:$title", null)?.let { if (!isPartialGroup(this, it)) return it }
-            return resolveGroup(title, people) ?: run {
+            // Old title mapping (from before shortcut ids): a real group wins outright; a guess is kept only
+            // when nothing better is known, so the chat doesn't split from its history
+            val legacy = if (useLegacy && title.isNotBlank()) prefs.getString("grp:$title", null) else null
+            if (legacy != null && !isPartialGroup(this, legacy) && !legacy.startsWith("g:")) return legacy
+            val key = resolveGroup(title, people) ?: legacy ?: run {
                 val numbers = people.mapNotNull { p -> numberOf(p) }.distinct()
                 if (numbers.size >= 2) Phone.convKey(numbers).also { markPartial(it) } else "g:$title"
             }
+            // No shortcut id to remember it by: remember by title (as before) so it doesn't split
+            if (keepTitle && title.isNotBlank()) prefs.edit().putString("grp:$title", key).apply()
+            return key
         }
         people.firstNotNullOfOrNull { numberOf(it) }?.let { return Phone.convKey(listOf(it)) }
         Hub.contacts.byName(title)?.let { return Phone.convKey(listOf(it.number)) }

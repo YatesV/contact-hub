@@ -30,6 +30,11 @@ class ActionReceiver : BroadcastReceiver() {
                     try { runCatching { markRead(key); Notifier.cancel(ctx, key) } } finally { pending.finish() }
                 }
             }
+            COPY -> intent.getStringExtra("code")?.let { code ->
+                ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("Code", code))
+                android.widget.Toast.makeText(ctx, "Copied $code", android.widget.Toast.LENGTH_SHORT).show()
+            }
             CALL -> intent.getStringExtra("n")?.takeIf { it.isNotBlank() }?.let { CallManager.place(ctx, it) }
             ANSWER -> CallManager.answer()
             DECLINE -> CallManager.hangup()
@@ -49,6 +54,7 @@ class ActionReceiver : BroadcastReceiver() {
         const val CALL = "com.yatesv.contacthub.CALL"
         const val DECLINE = "com.yatesv.contacthub.DECLINE"
         const val AUTO_REPLY = "com.yatesv.contacthub.AUTO_REPLY"
+        const val COPY = "com.yatesv.contacthub.COPY_CODE"
 
         /** Marks read in Orbit and taps "Mark as read" in the Messages app too, so both stay in sync. */
         suspend fun markRead(key: String) {

@@ -39,8 +39,9 @@ class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
             try {
             // Background: never open Google Messages over whatever you're doing. It goes through the
             // send queue, which holds it for RCS (unlock / open Orbit) instead of falling back to SMS.
-            SendQueue.add(applicationContext, s.convKey, s.body, drive = false, background = true,
-                addresses = s.addresses.split(',').filter { it.isNotBlank() })
+            val files = Hub.orbit.scheduleFiles(s.id)
+            SendQueue.add(applicationContext, s.convKey, if (files.isNotEmpty() && s.body.startsWith("📎 ")) "" else s.body, drive = false, background = true,
+                addresses = s.addresses.split(',').filter { it.isNotBlank() }, uris = files)
             dao.setScheduled(s.id, "sent")
             // Repeating texts: schedule the next one
             runCatching { RecurringTexts.afterSent(s) }

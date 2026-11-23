@@ -278,6 +278,11 @@ fun LaptopPage() {
             Text("Code:", style = MaterialTheme.typography.bodySmall)
             Text(st.pin.chunked(3).joinToString(" "), fontFamily = FontFamily.Monospace, fontSize = 32.sp, fontWeight = FontWeight.Bold)
             if (st.clients > 0) Text("✓ Laptop connected", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+            Spacer(Modifier.size(10.dp))
+            if (st.secure) Text("🔒 Encrypted. Your browser will warn that the certificate isn't trusted the first time; that's normal for a phone. " +
+                "Pick Advanced → Continue. To be sure it's your phone, the certificate's SHA-256 fingerprint starts with " +
+                st.fingerprint.take(23) + ".", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Text("Not encrypted on this phone: only use it on your home Wi-Fi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
     }
 }

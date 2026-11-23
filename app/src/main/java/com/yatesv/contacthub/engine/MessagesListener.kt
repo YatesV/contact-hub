@@ -30,6 +30,14 @@ class MessagesListener : NotificationListenerService() {
     private val prefs by lazy { getSharedPreferences("listener", Context.MODE_PRIVATE) }
 
     override fun onListenerConnected() { connected = true }
+
+    /** Google Messages notification -> chat key, to know which chat a removed notification was. */
+    private val notifKeys = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (sbn.packageName != GOOGLE_MESSAGES && sbn.packageName != SAMSUNG_MESSAGES) return
+        notifKeys.remove(sbn.key)?.let { ReplyWatch.notificationRemoved(it) }
+    }
     override fun onListenerDisconnected() { connected = false }
 
     /** Notifications that arrived before contacts / the chat list were loaded, handled in order. */
@@ -66,6 +74,11 @@ class MessagesListener : NotificationListenerService() {
         val isGroup = style.isGroupConversation
         val key = convKeyFor(n.shortcutId, title, msgs.map { it.person }, isGroup)
         if (key.isEmpty()) return
+        notifKeys[sbn.key] = key
+        // Your own messages in Google Messages' notification = a reply-button send that really went
+        msgs.filter { it.person == null || it.person?.name == style.user.name }.forEach { m ->
+            m.text?.toString()?.let { ReplyWatch.sawOutgoing(key, it) }
+        }
 
         val handle = n.replyHandle(pkg, title)
         handle?.let {
@@ -133,6 +146,7 @@ class MessagesListener : NotificationListenerService() {
             // Swap Google Messages' notification for Orbit's, only after any files were copied
             // (hiding it first can take away Orbit's access to the photo)
             if (s.handleNotifications && incoming.isNotEmpty()) {
+                notifKeys.remove(sbn.key)   // Orbit removing it isn't Google Messages confirming a reply
                 runCatching { cancelNotification(sbn.key) }
                 if (Hub.openConv != key) Notifier.showMessage(this@MessagesListener, key, title, isGroup,
                     msgs.takeLast(6).map { (it.person?.name?.toString() ?: "You") to (it.text?.toString().orEmpty()) }

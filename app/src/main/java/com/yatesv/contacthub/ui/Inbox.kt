@@ -66,6 +66,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -440,7 +443,9 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit) {
         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh, Motion.spec(), label = "pill")
     Text(label, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
         style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp))
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg)
+            // Screen readers: a tab-like filter that says whether it's picked
+            .androidx_selectable(selected, onClick).padding(horizontal = 14.dp, vertical = 7.dp))
 }
 
 /** Pinned chats as big circles at the top. */
@@ -476,7 +481,11 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
     val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         Modifier.fillMaxWidth().pressScale(press, 0.985f)
-            .combinedClickable(press, androidx.compose.material3.ripple(), onClick = onClick, onLongClick = onLong).padding(start = 6.dp, end = 16.dp),
+            .combinedClickable(press, androidx.compose.material3.ripple(), onClick = onClick, onLongClick = onLong,
+                onClickLabel = "Open chat", onLongClickLabel = "Chat options")
+            // Screen readers hear "unread" and the latest message in one go
+            .semanticsUnread(r.unread)
+            .padding(start = 6.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Unread dot lives in the left margin, so names stay aligned
@@ -513,7 +522,7 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
 @Composable
 fun NewChatScreen() {
     var query by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    var picked by remember { mutableStateOf(Nav.newChatPrefill.map { (Hub.contacts.cached(it)?.name ?: Phone.pretty(it)) to it }.also { Nav.newChatPrefill = emptyList() }) }
     var contacts by remember { mutableStateOf(emptyList<com.yatesv.contacthub.data.ContactInfo>()) }
     LaunchedEffect(Unit) { contacts = Hub.contacts.all() }
     val matches = contacts.filter { query.isBlank() || it.name.contains(query, true) || Phone.norm(it.number).contains(Phone.norm(query)) }
@@ -634,7 +643,9 @@ fun ScheduledScreen() {
                         scope.launch {
                             val dao = Hub.db.dao()
                             if (dao.claimScheduled(s.id) == 0) return@launch   // already going out
-                            com.yatesv.contacthub.engine.SendQueue.add(ctx, s.convKey, body, addresses = s.addresses.split(',').filter { it.isNotBlank() })
+                            val files = Hub.orbit.scheduleFiles(s.id)
+                            com.yatesv.contacthub.engine.SendQueue.add(ctx, s.convKey, if (files.isNotEmpty() && body.startsWith("📎 ")) "" else body,
+                                addresses = s.addresses.split(',').filter { it.isNotBlank() }, uris = files)
                             dao.setScheduled(s.id, "sent")
                             runCatching { com.yatesv.contacthub.engine.RecurringTexts.afterSent(s.copy(body = body)) }
                         }
@@ -649,3 +660,9 @@ fun ScheduledScreen() {
         }
     }
 }
+
+private fun Modifier.androidx_selectable(selected: Boolean, onClick: () -> Unit): Modifier =
+    this.then(Modifier.selectable(selected = selected, role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick))
+
+private fun Modifier.semanticsUnread(unread: Boolean): Modifier =
+    if (!unread) this else this.then(Modifier.semantics { stateDescription = "Unread" })

@@ -34,6 +34,10 @@ data class Msg(
     /** 0 = sent/received, 1 = sending, 2 = failed */
     val status: Int = 0,
     val rcs: Boolean = false,
+    /** The carrier confirmed it reached their phone (SMS delivery report) */
+    val delivered: Boolean = false,
+    /** SIM it went through / came in on (dual SIM), -1 = unknown */
+    val subId: Int = -1,
 )
 
 data class ContactInfo(
@@ -157,11 +161,14 @@ class SmsRepo(private val ctx: Context) {
     suspend fun messages(threadId: Long, limit: Int = 80, group: Boolean = false): List<Msg> = withContext(Dispatchers.IO) {
         if (threadId <= 0) return@withContext emptyList()
         val sms = runCatching { cr.query(
-            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type"),
+            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type", "status", "sub_id"),
             "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
         ).rows(limit) { c ->
             val type = c.int("type")
             Msg(
+                delivered = type == Telephony.Sms.MESSAGE_TYPE_SENT && c.int("status") == Telephony.Sms.STATUS_COMPLETE &&
+                    c.getColumnIndex("status").let { it >= 0 && !c.isNull(it) },
+                subId = c.getColumnIndex("sub_id").let { if (it >= 0 && !c.isNull(it)) c.getInt(it) else -1 },
                 key = "s:${c.long("_id")}", body = c.str("body"), date = c.long("date"),
                 outgoing = type != Telephony.Sms.MESSAGE_TYPE_INBOX, sender = c.str("address"),
                 status = when (type) {

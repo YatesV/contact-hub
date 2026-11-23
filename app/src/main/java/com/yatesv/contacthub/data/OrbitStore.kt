@@ -68,6 +68,15 @@ class OrbitStore(ctx: Context) {
     fun repeatOf(id: Long): String = obj("repeat").optString(id.toString(), "")
     @Synchronized fun setRepeat(id: Long, rule: String) = put("repeat", obj("repeat").apply { if (rule.isBlank()) remove(id.toString()) else put(id.toString(), rule) })
 
+    /** Chat → SIM (subscription id) to send from in Orbit mode; -1 = phone's default */
+    fun simFor(key: String): Int = obj("sim").optInt(key, -1)
+    @Synchronized fun setSim(key: String, subId: Int) = put("sim", obj("sim").apply { if (subId < 0) remove(key) else put(key, subId) })
+
+    /** Scheduled id → photos/videos to send with it (Orbit's own copies, so they're still there later) */
+    fun scheduleFiles(id: Long): List<String> = obj("schedFiles").optJSONArray(id.toString())?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+    @Synchronized fun setScheduleFiles(id: Long, uris: List<String>) =
+        put("schedFiles", obj("schedFiles").apply { if (uris.isEmpty()) remove(id.toString()) else put(id.toString(), JSONArray(uris)) })
+
     // ---------------- Nudges ----------------
     /** phoneKey → days */
     fun nudges(): Map<String, Int> = obj("nudge").let { o -> o.keys().asSequence().associateWith { o.getInt(it) } }

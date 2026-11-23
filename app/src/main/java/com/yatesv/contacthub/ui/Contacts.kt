@@ -506,7 +506,7 @@ private fun Stat(value: String, label: String) {
 }
 
 @Composable
-fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = null, onLong: (() -> Unit)? = null) {
+fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = null, onLong: (() -> Unit)? = null, count: Int = 1) {
     val (icon, color) = when (c.type) {
         CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> Icons.AutoMirrored.Filled.CallMissed to MaterialTheme.colorScheme.error
         CallLog.Calls.OUTGOING_TYPE -> Icons.AutoMirrored.Filled.CallMade to MaterialTheme.colorScheme.primary
@@ -520,10 +520,12 @@ fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = nul
             val n = Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number)
             Avatar(n, Hub.contacts.cached(c.number)?.photo, 40.dp); Spacer(Modifier.width(12.dp))
         }
-        Icon(icon, null, Modifier.size(18.dp), tint = color)
+        Icon(icon, when (c.type) {
+            CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> "Missed call"; CallLog.Calls.OUTGOING_TYPE -> "Outgoing call"
+            CallLog.Calls.BLOCKED_TYPE -> "Blocked call"; else -> "Incoming call" }, Modifier.size(18.dp), tint = color)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            if (showName) Text(Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number),
+            if (showName) Text((Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number)) + if (count > 1) " ($count)" else "",
                 color = if (c.type == CallLog.Calls.MISSED_TYPE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
             Text(fullTime(c.date) + if (c.duration > 0) " · ${talkTime(c.duration)}" else "", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)

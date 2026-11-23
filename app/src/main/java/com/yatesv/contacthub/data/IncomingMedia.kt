@@ -86,6 +86,13 @@ object IncomingMedia {
         return uri(ctx, out)
     }
 
+    /** Share sheet for a photo/video/file. */
+    fun share(ctx: Context, a: Attachment): Boolean = runCatching {
+        val u = shareable(ctx, a)
+        ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(a.mime).putExtra(Intent.EXTRA_STREAM, u)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { HubLog.w("Media", "share failed (${a.mime})", it) }.isSuccess
+
     /** Opens the attachment full screen in the phone's viewer (Gallery, Photos, a PDF app…). */
     fun open(ctx: Context, a: Attachment): Boolean = runCatching {
         val u = shareable(ctx, a)

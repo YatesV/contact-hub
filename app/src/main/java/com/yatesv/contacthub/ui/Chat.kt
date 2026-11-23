@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SimCard
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Snooze
@@ -165,7 +166,7 @@ object ChatData0 {
             val dup = byBody[l.outgoing to l.body.trim()]?.any { kotlin.math.abs(it - l.date) < 180_000 } == true
             if (!dup) merged += Msg("l:${l.id}", l.body, l.date, l.outgoing, l.sender,
                 attachments = com.yatesv.contacthub.data.IncomingMedia.forMessage(Hub.app, "l:${l.id}"), rcs = true,
-                status = if (l.source == "failed") 2 else 0)
+                status = when (l.source) { "failed" -> 2; "unconfirmed" -> 3; else -> 0 })
         }
         merged.sortBy { it.date }
         // Messages you removed from Orbit
@@ -201,7 +202,7 @@ private suspend fun com.yatesv.contacthub.data.HubDao.reactionsFlowOnce(key: Str
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(key: String) {
+fun ChatScreen(key: String, onBack: () -> Unit = { Nav.back() }) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val dao = Hub.db.dao()
@@ -228,6 +229,7 @@ fun ChatScreen(key: String) {
     var picked by remember(key) { mutableStateOf(setOf<String>()) }
     var forwardThese by remember { mutableStateOf<List<Msg>?>(null) }
     var deleteThese by remember { mutableStateOf<List<Msg>?>(null) }
+    var detailsFor by remember { mutableStateOf<Msg?>(null) }
     var showGifs by remember { mutableStateOf(false) }
     var editPhoto by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Uri?>(null) }
     var cameraUri by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -235,6 +237,8 @@ fun ChatScreen(key: String) {
     var newBelow by remember(key) { mutableStateOf(false) }
     var showTimes by remember { mutableStateOf(setOf<String>()) }
     var scheduling by remember { mutableStateOf(false) }
+    /** Photos picked to schedule (copied into Orbit so they're still readable when it's time) */
+    var scheduleFiles by remember { mutableStateOf<List<String>>(emptyList()) }
     var groupDialog by remember { mutableStateOf(false) }
     var colorDialog by remember { mutableStateOf(false) }
     var catchUp by remember { mutableStateOf(false) }
@@ -305,6 +309,15 @@ fun ChatScreen(key: String) {
         // One photo: open the editor first (draw/crop). Several: send them as they are.
         if (uris.size == 1 && ctx.contentResolver.getType(uris[0])?.startsWith("image") == true && ctx.contentResolver.getType(uris[0])?.contains("gif") != true) editPhoto = uris[0]
         else sendFiles(uris)
+    }
+    val pickScheduled = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            scheduleFiles = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                uris.mapNotNull { u -> copyIncoming(ctx, u, ctx.contentResolver.getType(u))?.let { OutFiles.uri(ctx, it).toString() } }
+            }
+            if (scheduleFiles.isEmpty()) snack.showSnackbar("Couldn't read those files") else scheduling = true
+        }
     }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (ok) cameraUri?.let { editPhoto = it } }
     val takeVideo = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok -> if (ok) cameraUri?.let { sendFiles(listOf(it)) } }
@@ -386,7 +399,7 @@ fun ChatScreen(key: String) {
             CenterAlignedTopAppBar(
                 expandedHeight = 76.dp,
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f)),
-                navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "Back", tint = MaterialTheme.colorScheme.primary) } },
+                navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBackIos, "Back", tint = MaterialTheme.colorScheme.primary) } },
                 title = {
                     // Photo on top, name underneath: tap for their contact card
                     Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable {
@@ -417,6 +430,17 @@ fun ChatScreen(key: String) {
                             DropdownMenuItem({ Text("Chat wallpaper") }, { menu = false; pickWallpaper.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
                             if (meta.wallpaperUri.isNotBlank()) DropdownMenuItem({ Text("Remove chat wallpaper") }, { menu = false; scope.launch { InboxData.updateMeta(key) { it.copy(wallpaperUri = "") } } })
                             DropdownMenuItem({ Text("Bubble color for this chat") }, { menu = false; colorDialog = true })
+                            // Dual SIM (Orbit mode): which SIM this chat sends from
+                            val sims = remember { com.yatesv.contacthub.engine.HubSms.sims(ctx) }
+                            if (sims.size > 1 && com.yatesv.contacthub.engine.HubSms.isDefault(ctx)) {
+                                val cur = Hub.orbit.simFor(key)
+                                DropdownMenuItem({ Text("Send from: ${sims.firstOrNull { it.first == cur }?.second ?: "Default SIM"}") }, {
+                                    menu = false
+                                    // Cycles Default → SIM 1 → SIM 2 → Default
+                                    val order = listOf(-1) + sims.map { it.first }
+                                    Hub.orbit.setSim(key, order[(order.indexOf(cur).coerceAtLeast(0) + 1) % order.size])
+                                }, leadingIcon = { Icon(Icons.Default.SimCard, null) })
+                            }
                             DropdownMenuItem({ Text("Notification sound") }, {
                                 menu = false
                                 pickSound.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
@@ -452,6 +476,8 @@ fun ChatScreen(key: String) {
                         q.created, true, status = when (q.state) { "failed" -> 2; "unconfirmed" -> 3; "held" -> 4; else -> 1 }) }
                 val justSent = queue.filter { it.key == key && it.state == "sent" }.map { it.body }.toSet()
                 val msgs = real + waiting
+                // Photos/videos of this chat, for swiping through in the full-screen viewer
+                androidx.compose.runtime.SideEffect { MediaViewer.gallery = real.flatMap { it.attachments }.filter { MediaViewer.viewable(it) } }
                 // Opened from Search / Starred: scroll to that message (loading older ones until it's found)
                 LaunchedEffect(data) {
                     val j = Nav.jumps[key] ?: return@LaunchedEffect
@@ -570,6 +596,7 @@ fun ChatScreen(key: String) {
                                 onClick = {
                                     if (picked.isNotEmpty()) { picked = if (m.key in picked) picked - m.key else picked + m.key }
                                     else if (m.key.startsWith("q:") && m.status in 2..4) failedTap = queue.firstOrNull { "q:${it.id}" == m.key }
+                                    else if (m.key.startsWith("l:") && m.status == 3) scope.launch { snack.showSnackbar("Google Messages didn't confirm this one went. Check it there before sending again.") }
                                     else showTimes = if (m.key in showTimes) showTimes - m.key else showTimes + m.key
                                 },
                                 onLong = { Haptics.long(view); if (picked.isNotEmpty()) picked = if (m.key in picked) picked - m.key else picked + m.key else selected = m },
@@ -593,6 +620,7 @@ fun ChatScreen(key: String) {
                                     m.status == 2 -> "Not delivered · tap to retry"
                                     m.status == 3 -> "Couldn't confirm · check Google Messages"
                                     m.status == 4 -> "Waiting to send over RCS"
+                                    m.delivered -> "Delivered"
                                     chatType == "sms" || (!m.rcs && m.key.startsWith("s:")) -> "Sent as text message"
                                     else -> "Sent"
                                 },
@@ -642,7 +670,9 @@ fun ChatScreen(key: String) {
                                     else locPerm.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)) },
                                     leadingIcon = { Icon(Icons.Default.Place, null) })
                                 DropdownMenuItem({ Text("Contact") }, { plus = false; runCatching { pickContact.launch(null) } }, leadingIcon = { Icon(Icons.Default.Person, null) })
-                                DropdownMenuItem({ Text("Schedule message") }, { plus = false; if (text.isNotBlank()) scheduling = true else scope.launch { snack.showSnackbar("Type a message first, then schedule it") } },
+                                DropdownMenuItem({ Text("Schedule message") }, { plus = false; scheduleFiles = emptyList(); if (text.isNotBlank()) scheduling = true else scope.launch { snack.showSnackbar("Type a message first, then schedule it") } },
+                                    leadingIcon = { Icon(Icons.Default.Schedule, null) })
+                                DropdownMenuItem({ Text("Schedule photos") }, { plus = false; pickScheduled.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                                     leadingIcon = { Icon(Icons.Default.Schedule, null) })
                             }
                         }
@@ -710,7 +740,9 @@ fun ChatScreen(key: String) {
         val pinned = Hub.orbit.pins(key).any { it.msgKey == m.key }
         val extra = buildList<Pair<String, () -> Unit>> {
             if (m.attachments.isNotEmpty()) {
-                add("Open" to { selected = null; m.attachments.firstOrNull()?.let { a -> if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "Couldn't open it" } })
+                add("Open" to { selected = null; m.attachments.firstOrNull()?.let { a ->
+                    if (MediaViewer.viewable(a)) MediaViewer.show(a) else if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "Couldn't open it" } })
+                add("Share" to { selected = null; m.attachments.firstOrNull()?.let { com.yatesv.contacthub.data.IncomingMedia.share(ctx, it) } })
                 add((if (m.attachments.size > 1) "Save all to phone" else "Save to phone") to {
                     selected = null
                     scope.launch {
@@ -724,6 +756,7 @@ fun ChatScreen(key: String) {
                 add("See it in Google Messages" to { selected = null; com.yatesv.contacthub.data.IncomingMedia.openInMessages(ctx, key) })
             if (!m.key.startsWith("q:")) add("Reply" to { selected = null; replyTo = m; runCatching { focus.requestFocus() } })
             add("Forward" to { selected = null; forwardThese = listOf(m) })
+            add("Details" to { selected = null; detailsFor = m })
             add("Select" to { selected = null; picked = setOf(m.key) })
             add("Delete" to { selected = null; deleteThese = listOf(m) })
             if (!m.key.startsWith("q:")) add((if (pinned) "Unpin" else "Pin to top") to {
@@ -782,6 +815,8 @@ fun ChatScreen(key: String) {
     if (snoozing) SnoozeDialog(key) { snoozing = false }
     selectText?.let { t -> SelectTextDialog(t) { selectText = null } }
 
+    detailsFor?.let { m -> MessageDetails(m, key, addresses) { detailsFor = null } }
+
     failedTap?.let { f ->
         when (f.state) {
             // Send was tapped but not confirmed: retrying could send it twice
@@ -812,12 +847,16 @@ fun ChatScreen(key: String) {
         }
     }
 
-    if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at, repeat ->
+    if (scheduling) ScheduleDialog(onDismiss = { scheduling = false; scheduleFiles = emptyList() }) { at, repeat ->
         scheduling = false
         val body = text.trim()
+        val files = scheduleFiles
+        scheduleFiles = emptyList()
         text = ""
         scope.launch {
-            val id = dao.schedule(Scheduled(convKey = key, addresses = addresses.joinToString(","), body = body, sendAt = at))
+            val id = dao.schedule(Scheduled(convKey = key, addresses = addresses.joinToString(","),
+                body = body.ifBlank { if (files.isNotEmpty()) "📎 ${files.size} attachment${if (files.size > 1) "s" else ""}" else "" }, sendAt = at))
+            if (files.isNotEmpty()) Hub.orbit.setScheduleFiles(id, files)
             if (repeat.isNotBlank()) Hub.orbit.setRepeat(id, repeat)
             ScheduleWorker.enqueue(ctx, at - System.currentTimeMillis())
             snack.showSnackbar("Scheduled for ${fullTime(at)}" + if (repeat.isNotBlank()) " · ${com.yatesv.contacthub.data.Recurring.label(repeat).lowercase()}" else "")
@@ -920,17 +959,17 @@ internal fun Bubble(
                     .then(if (mention) Modifier.border(2.dp, MaterialTheme.colorScheme.tertiary, style.bubble(m.outgoing, first, last)) else Modifier)
                     .graphicsLayer { scaleX = bounce.value; scaleY = bounce.value }
                     .combinedClickable(onClick = onClick, onLongClick = onLong,
-                        onDoubleClick = if (onDouble != null) ({ bursts++; onDouble() }) else null)
+                        onDoubleClick = if (onDouble != null) ({ bursts++; onDouble() }) else null,
+                        onClickLabel = "Show time", onLongClickLabel = "React, reply and more")
                     .padding(if (emojiOnly) 2.dp else 0.dp),
             ) {
                 m.attachments.forEach { a ->
                     when {
                         a.mime.startsWith("audio") -> AudioAttachment(a.uri, fg)
-                        a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime)
-                        a.mime.startsWith("image") -> AsyncImage(a.uri, null, Modifier.widthIn(max = 300.dp).heightIn(max = 340.dp)
-                            .clickable {
-                                if (!com.yatesv.contacthub.data.IncomingMedia.open(ctx, a)) Hub.banner.value = "Couldn't open this picture"
-                            },
+                        a.mime.startsWith("video") -> VideoAttachment(a.uri, a.mime) { MediaViewer.show(a) }
+                        // Min height so the chat doesn't jump while the photo loads; tap = full screen in Orbit
+                        a.mime.startsWith("image") -> AsyncImage(a.uri, "Photo", Modifier.widthIn(min = 120.dp, max = 300.dp).heightIn(min = 140.dp, max = 340.dp)
+                            .clickable { MediaViewer.show(a) },
                             contentScale = ContentScale.Crop)
                         // Contact cards, PDFs and other files: a tappable row instead of a broken picture
                         else -> Row(Modifier.clickable {
@@ -1140,6 +1179,8 @@ private fun GroupDialog(key: String, addresses: List<String>, group: GroupInfo?,
                     TextButton({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("Choose photo") }
                     if (photo.isNotBlank()) TextButton({ photo = "" }) { Text("Remove") }
                 }
+                // Group texts can't change who's in them: this starts a new group with the people you pick
+                if (addresses.size > 1) TextButton({ onDone(); Nav.newChatPrefill = addresses; Nav.go(Screen.NewChat) }) { Text("Add or remove people (starts a new group)") }
                 Text("Member colors", style = MaterialTheme.typography.labelLarge)
                 addresses.forEach { a ->
                     val k = Phone.norm(a)
@@ -1166,5 +1207,43 @@ private fun GroupDialog(key: String, addresses: List<String>, group: GroupInfo?,
                 onDone()
             }) { Text("Save") }
         },
+    )
+}
+
+/** Who it's from/to, when it was sent, how (SMS/MMS/RCS), delivery and SIM. */
+@Composable
+private fun MessageDetails(m: Msg, key: String, addresses: List<String>, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val kind = when {
+        m.key.startsWith("s:") -> "Text message (SMS)"
+        m.key.startsWith("m:") -> "Picture/group message (MMS)"
+        m.key.startsWith("q:") -> "Waiting to send"
+        else -> "Chat message (RCS)"
+    }
+    fun who(n: String) = (Hub.contacts.cached(n)?.name?.let { "$it · " } ?: "") + Phone.pretty(n)
+    val rows = buildList {
+        add("Type" to kind)
+        if (m.outgoing) add("To" to (addresses.joinToString("\n") { who(it) }.ifBlank { InboxData.nameFor(key, addresses, null, null) }))
+        else add("From" to (m.sender.takeIf { it.isNotBlank() }?.let { s -> if (s.any { it.isDigit() }) who(s) else s } ?: InboxData.nameFor(key, addresses, null, null)))
+        add((if (m.outgoing) "Sent" else "Received") to java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.LONG, java.text.DateFormat.MEDIUM).format(java.util.Date(m.date)))
+        if (m.outgoing) add("Status" to when (m.status) {
+            1 -> "Sending"; 2 -> "Not sent"; 3 -> "Not confirmed (check Google Messages)"; 4 -> "Waiting to send over RCS"
+            else -> if (m.delivered) "Delivered" else if (m.key.startsWith("s:")) "Sent (no delivery report)" else "Sent"
+        })
+        com.yatesv.contacthub.engine.HubSms.simName(ctx, m.subId)?.let { add("SIM" to it) }
+        if (m.attachments.isNotEmpty()) add("Attachments" to m.attachments.joinToString(", ") { it.mime })
+    }
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Message details") },
+        text = {
+            Column {
+                rows.forEach { (k, v) ->
+                    Text(k, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+                    androidx.compose.foundation.text.selection.SelectionContainer { Text(v, style = MaterialTheme.typography.bodyMedium) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onDone) { Text("Close") } },
     )
 }

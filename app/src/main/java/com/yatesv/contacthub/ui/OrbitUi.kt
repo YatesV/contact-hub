@@ -64,6 +64,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -368,7 +370,19 @@ fun AudioAttachment(uri: Uri, fg: Color) {
     var text by remember(uri) { mutableStateOf(Transcripts.map[uri.toString()]) }
     var busy by remember { mutableStateOf(false) }
     val player = remember { arrayOfNulls<MediaPlayer>(1) }
-    DisposableEffect(uri) { onDispose { player[0]?.release(); player[0] = null } }
+    var position by remember { mutableStateOf(0) }
+    var duration by remember(uri) { mutableStateOf(AudioDurations.map[uri.toString()] ?: 0) }
+    DisposableEffect(uri) { onDispose { player[0]?.release(); player[0] = null; if (AudioPlayback.current.value == uri.toString()) AudioPlayback.current.value = null } }
+    // Length shown before playing
+    LaunchedEffect(uri) {
+        if (duration == 0) duration = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { android.media.MediaMetadataRetriever().use { r -> r.setDataSource(ctx, uri); r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull() ?: 0 } }.getOrDefault(0)
+        }.also { AudioDurations.map[uri.toString()] = it }
+    }
+    // Only one voice message plays at a time: another one starting pauses this one
+    val nowPlaying by AudioPlayback.current
+    LaunchedEffect(nowPlaying) { if (nowPlaying != uri.toString() && playing) { player[0]?.pause(); playing = false } }
+    LaunchedEffect(playing) { while (playing) { position = player[0]?.currentPosition ?: 0; kotlinx.coroutines.delay(150) } }
     fun transcribe() = scope.launch {
         busy = true
         Ai.transcribe(ctx, uri).onSuccess { t -> text = t; Transcripts.map[uri.toString()] = t }.onFailure { text = "⚠️ ${it.message}" }
@@ -385,12 +399,27 @@ fun AudioAttachment(uri: Uri, fg: Color) {
             IconButton({
                 if (playing) { player[0]?.pause(); playing = false }
                 else {
-                    val p = player[0] ?: runCatching { MediaPlayer.create(ctx, uri) }.getOrNull()?.also { mp -> player[0] = mp; mp.setOnCompletionListener { playing = false } }
-                    if (p == null) Hub.banner.value = "Can't play that audio" else { p.start(); playing = true }
+                    val p = player[0] ?: runCatching { MediaPlayer.create(ctx, uri) }.getOrNull()?.also { mp ->
+                        player[0] = mp; if (duration == 0) duration = mp.duration
+                        mp.setOnCompletionListener { playing = false; position = 0; it.seekTo(0) }
+                    }
+                    if (p == null) Hub.banner.value = "Can't play that audio" else { AudioPlayback.current.value = uri.toString(); p.start(); playing = true }
                 }
-            }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pause" else "Play", tint = fg) }
-            Icon(Icons.Default.GraphicEq, null, tint = fg.copy(alpha = 0.7f))
-            Text(" Voice message", color = fg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pause voice message" else "Play voice message", tint = fg) }
+            Column(Modifier.weight(1f)) {
+                // Drag to jump around in the message
+                androidx.compose.material3.Slider(
+                    value = if (duration > 0) position.toFloat() / duration else 0f,
+                    onValueChange = { f ->
+                        val mp = player[0] ?: runCatching { MediaPlayer.create(ctx, uri) }.getOrNull()?.also { player[0] = it; it.setOnCompletionListener { _ -> playing = false; position = 0 } }
+                        val to = (f * duration).toInt(); mp?.seekTo(to); position = to
+                    },
+                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = fg, activeTrackColor = fg, inactiveTrackColor = fg.copy(alpha = 0.3f)),
+                    modifier = Modifier.height(24.dp).semantics { contentDescription = "Voice message position" },
+                )
+                Text(if (playing || position > 0) "${clock(position)} / ${clock(duration)}" else if (duration > 0) "Voice message · ${clock(duration)}" else "Voice message",
+                    color = fg.copy(alpha = 0.85f), style = MaterialTheme.typography.labelSmall)
+            }
             if (text == null) TextButton({
                 if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) transcribe()
                 else mic?.launch(android.Manifest.permission.RECORD_AUDIO) ?: run { text = "⚠️ Open the chat in Orbit to turn this into text" }
@@ -401,13 +430,18 @@ fun AudioAttachment(uri: Uri, fg: Color) {
 }
 
 object Transcripts { val map = HashMap<String, String>() }
+object AudioDurations { val map = java.util.concurrent.ConcurrentHashMap<String, Int>() }
+/** The voice message playing right now (only one at a time). */
+object AudioPlayback { val current = androidx.compose.runtime.mutableStateOf<String?>(null) }
+private fun clock(ms: Int) = "%d:%02d".format(ms / 60000, ms / 1000 % 60)
 object ReplyCache { val map = java.util.concurrent.ConcurrentHashMap<String, List<String>>() }
 
 @Composable
-fun VideoAttachment(uri: Uri, mime: String) {
+fun VideoAttachment(uri: Uri, mime: String, onOpen: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     Box(Modifier.size(220.dp, 150.dp).background(Color.Black).clickable {
-        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        if (onOpen != null) onOpen()
+        else runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
             .onFailure { Hub.banner.value = "No app on this phone plays this video" }
     }, contentAlignment = Alignment.Center) {
         coil.compose.AsyncImage(uri, null, Modifier.size(220.dp, 150.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)

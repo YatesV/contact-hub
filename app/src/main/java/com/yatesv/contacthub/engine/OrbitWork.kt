@@ -263,6 +263,7 @@ object RecurringTexts {
         val id = Hub.db.dao().schedule(com.yatesv.contacthub.data.Scheduled(convKey = s.convKey, addresses = s.addresses, body = s.body, sendAt = next))
         Hub.orbit.setRepeat(id, rule)
         Hub.orbit.setRepeat(s.id, "")
+        Hub.orbit.scheduleFiles(s.id).takeIf { it.isNotEmpty() }?.let { Hub.orbit.setScheduleFiles(id, it) }
         ScheduleWorker.enqueue(Hub.app, next - System.currentTimeMillis())
     }
 }

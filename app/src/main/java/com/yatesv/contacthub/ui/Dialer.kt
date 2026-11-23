@@ -132,12 +132,32 @@ private fun RecentsTab() {
     val version by Hub.version.collectAsState()
     var calls by remember { mutableStateOf<List<CallEntry>?>(null) }
     var options by remember { mutableStateOf<CallEntry?>(null) }
+    var optionsGroup by remember { mutableStateOf<List<CallEntry>>(emptyList()) }
+    var missedOnly by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(version) { calls = Hub.contacts.calls() }
-    if (calls?.isEmpty() == true) EmptyState(Icons.Default.Phone, "No recent calls", "Calls you make and get will show here.")
-    val sp = rememberSpeedScroll(Hub.settings.flow.collectAsState().value.scrollSpeed)
-    LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
-        items(calls.orEmpty(), key = { it.id }) { c ->
-            CallRow(c, onClick = { CallManager.place(ctx, c.number) }, onLong = { options = c })
+    val missedTypes = setOf(android.provider.CallLog.Calls.MISSED_TYPE, android.provider.CallLog.Calls.REJECTED_TYPE)
+    // Back-to-back calls with the same person on the same day show as one row "(3)"
+    val groups = remember(calls, missedOnly) {
+        val out = ArrayList<MutableList<CallEntry>>()
+        calls.orEmpty().filter { !missedOnly || it.type in missedTypes }.forEach { c ->
+            val last = out.lastOrNull()?.first()
+            if (last != null && Phone.norm(last.number) == Phone.norm(c.number) && sameDay(last.date, c.date) && (last.type in missedTypes) == (c.type in missedTypes)) out.last() += c
+            else out += mutableListOf(c)
+        }
+        out
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.FilterChip(!missedOnly, { missedOnly = false }, { Text("All") })
+            androidx.compose.material3.FilterChip(missedOnly, { missedOnly = true }, { Text("Missed") })
+        }
+        if (calls?.isEmpty() == true || (calls != null && groups.isEmpty())) EmptyState(Icons.Default.Phone, if (missedOnly) "No missed calls" else "No recent calls", "Calls you make and get will show here.")
+        val sp = rememberSpeedScroll(Hub.settings.flow.collectAsState().value.scrollSpeed)
+        LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
+            items(groups, key = { it.first().id }) { g ->
+                val c = g.first()
+                CallRow(c, count = g.size, onClick = { CallManager.place(ctx, c.number) }, onLong = { options = c; optionsGroup = g })
+            }
         }
     }
     options?.let { c ->
@@ -153,6 +173,14 @@ private fun RecentsTab() {
                         options = null
                         if (!Hub.contacts.setBlocked(c.number, true)) Hub.banner.value = "Make Orbit your default phone app to block numbers."
                     }) { Text("Block number") }
+                    TextButton({
+                        options = null
+                        val ids = optionsGroup.map { it.id }.ifEmpty { listOf(c.id) }
+                        val removed = runCatching {
+                            ctx.contentResolver.delete(android.provider.CallLog.Calls.CONTENT_URI, "${android.provider.CallLog.Calls._ID} IN (${ids.joinToString(",")})", null)
+                        }.getOrDefault(0)
+                        if (removed > 0) Hub.changed() else Hub.banner.value = "Make Orbit your default phone app to delete call history."
+                    }) { Text(if (optionsGroup.size > 1) "Delete these ${optionsGroup.size} calls from history" else "Delete from call history") }
                 }
             },
             confirmButton = { TextButton({ options = null }) { Text("Close") } },
@@ -176,4 +204,10 @@ private fun FavoritesTab() {
             }
         }
     }
+}
+
+private fun sameDay(a: Long, b: Long): Boolean {
+    val ca = java.util.Calendar.getInstance().apply { timeInMillis = a }
+    val cb = java.util.Calendar.getInstance().apply { timeInMillis = b }
+    return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR) && ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
 }

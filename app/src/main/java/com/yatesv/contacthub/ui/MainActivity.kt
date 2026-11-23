@@ -90,6 +90,8 @@ object Nav {
     /** Open a chat scrolled to one message (from Search / Starred): msg key, text and time to find it by. */
     data class Jump(val msgKey: String, val body: String, val date: Long)
     val jumps = java.util.concurrent.ConcurrentHashMap<String, Jump>()
+    /** People already picked when New chat opens (changing a group's members starts a new group). */
+    var newChatPrefill: List<String> = emptyList()
     fun openAt(convKey: String, msgKey: String, body: String, date: Long) { jumps[convKey] = Jump(msgKey, body, date); go(Screen.Chat(convKey)) }
     fun back(): Boolean = if (stack.size > 1) { forward = false; stack.removeAt(stack.lastIndex); true } else false
     fun replace(s: Screen) { forward = true; if (stack.size > 1) stack[stack.lastIndex] = s else stack.add(s) }
@@ -280,6 +282,7 @@ fun AppRoot() {
     }
     }
     effect?.let { e -> EffectOverlay(e) { Effects.current.value = null } }
+    MediaViewerOverlay()
 }
 
 /** iOS-style push: new screen slides in from the right, old one slides a bit left and dims. */

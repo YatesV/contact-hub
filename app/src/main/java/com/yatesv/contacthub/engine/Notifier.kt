@@ -61,7 +61,32 @@ object Notifier {
             Intent(ctx, MainActivity::class.java).putExtra("conv", key).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-    suspend fun showMessage(ctx: Context, key: String, title: String, isGroup: Boolean, lines: List<Pair<String, String>>, mention: Boolean = false) {
+    /**
+     * A long-lived conversation shortcut per chat: puts Orbit's chats in Android's "Conversations"
+     * notification section with the contact's photo, and lets them become bubbles.
+     */
+    private fun conversationShortcut(ctx: Context, key: String, title: String, isGroup: Boolean): String {
+        val id = "conv_" + Integer.toHexString(key.hashCode())
+        runCatching {
+            val photo = if (!isGroup) Phone.addresses(key).firstOrNull()?.let { Hub.contacts.cached(it)?.photo } else null
+            val icon = photo?.let { p ->
+                runCatching { ctx.contentResolver.openInputStream(android.net.Uri.parse(p))?.use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
+            }?.let { androidx.core.graphics.drawable.IconCompat.createWithAdaptiveBitmap(it) }
+                ?: androidx.core.graphics.drawable.IconCompat.createWithResource(ctx, R.mipmap.ic_launcher)
+            val person = Person.Builder().setName(title).setKey(key).setIcon(icon).build()
+            val sc = androidx.core.content.pm.ShortcutInfoCompat.Builder(ctx, id)
+                .setShortLabel(title.ifBlank { "Chat" }).setLongLived(true).setIcon(icon)
+                .apply { if (!isGroup) setPerson(person) }
+                .setLocusId(androidx.core.content.LocusIdCompat(id))
+                .setIntent(Intent(ctx, MainActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra("conv", key))
+                .build()
+            androidx.core.content.pm.ShortcutManagerCompat.pushDynamicShortcut(ctx, sc)
+        }.onFailure { com.yatesv.contacthub.data.HubLog.w("Notify", "shortcut failed", it) }
+        return id
+    }
+
+    suspend fun showMessage(ctx: Context, key: String, title: String, isGroup: Boolean, lines: List<Pair<String, String>>, mention: Boolean = false,
+                            image: android.net.Uri? = null) {
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
         val s = Hub.settings.value
         val meta = Hub.db.dao().meta(key)
@@ -92,9 +117,30 @@ object Notifier {
             val now = System.currentTimeMillis()
             lines.forEachIndexed { i, (who, text) ->
                 val p = if (who == "You") null else Person.Builder().setName(who).build()
-                style.addMessage(text, now - (lines.size - i), p)
+                val msg = NotificationCompat.MessagingStyle.Message(text, now - (lines.size - i), p)
+                // A received photo shows in the notification itself
+                if (image != null && i == lines.lastIndex) msg.setData("image/jpeg", image)
+                style.addMessage(msg)
             }
             b.setStyle(style)
+            // Conversation: own section, contact photo, and (if you allow it) a floating bubble
+            val sc = conversationShortcut(ctx, key, title, isGroup)
+            b.setShortcutId(sc).setLocusId(androidx.core.content.LocusIdCompat(sc))
+            if (!s.appLock && meta?.hidden != true) runCatching {
+                val bubbleIntent = PendingIntent.getActivity(ctx, ("b" + key).hashCode(),
+                    Intent(ctx, com.yatesv.contacthub.ui.BubbleActivity::class.java).putExtra("conv", key).setAction("bubble:$key"),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                b.setBubbleMetadata(NotificationCompat.BubbleMetadata.Builder(bubbleIntent,
+                    androidx.core.graphics.drawable.IconCompat.createWithResource(ctx, R.mipmap.ic_launcher))
+                    .setDesiredHeight(640).setSuppressNotification(Hub.openConv == key).build())
+            }
+            // One-time codes: copy straight from the notification
+            com.yatesv.contacthub.data.Otp.find(lines.lastOrNull()?.second.orEmpty())?.let { code ->
+                val copy = PendingIntent.getBroadcast(ctx, ("c" + key).hashCode(),
+                    Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.COPY).putExtra("conv", key).putExtra("code", code),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                b.addAction(NotificationCompat.Action.Builder(R.drawable.ic_tile, "Copy $code", copy).build())
+            }
 
             val replyIntent = PendingIntent.getBroadcast(ctx, ("r" + key).hashCode(),
                 Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.REPLY).putExtra("conv", key),

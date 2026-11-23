@@ -93,7 +93,8 @@ object Sender {
             if (addresses.isEmpty()) return SendResult(false, Route.NONE, "Can't find the numbers for this chat")
             // Only the people who talked recently: an MMS to them would start a new, smaller group
             if (isPartialGroup(ctx, convKey)) return SendResult(false, Route.NONE, "Orbit only knows part of this group. Open it in Google Messages once so Orbit learns everyone in it.")
-            val ok = if (addresses.size == 1) HubSms.sendSms(ctx, addresses[0], body) else HubSms.sendMms(ctx, addresses, body)
+            val sim = Hub.orbit.simFor(convKey)
+            val ok = if (addresses.size == 1) HubSms.sendSms(ctx, addresses[0], body, sim) else HubSms.sendMms(ctx, addresses, body, subId = sim)
             Hub.setRcsState(convKey, "sms")
             return if (ok) SendResult(true, if (addresses.size == 1) Route.SMS else Route.MMS) else SendResult(false, Route.NONE, "Couldn't send")
         }
@@ -114,7 +115,9 @@ object Sender {
                 }.getOrElse { HubLog.w("Send", "reply button failed", it); false }
                 if (ok) {
                     HubLog.d("Send", "sent via Messages reply button")
-                    dao.addLocal(LocalMessage(convKey = convKey, body = body, date = System.currentTimeMillis(), outgoing = true, source = "sent"))
+                    val id = dao.addLocal(LocalMessage(convKey = convKey, body = body, date = System.currentTimeMillis(), outgoing = true, source = "sent"))
+                    // Handing it to the button doesn't prove it went: watch for Google Messages to show it
+                    ReplyWatch.expect(convKey, id, body)
                     Hub.changed()
                     return SendResult(true, Route.MESSAGES_REPLY)
                 } else Hub.replies.remove(convKey)
@@ -187,7 +190,9 @@ object Sender {
 
     /** Shrinks photos so they fit carrier MMS limits (about 1 MB). */
     private fun readForMms(ctx: Context, uri: Uri): Pdu.Part? = runCatching {
-        val mime = ctx.contentResolver.getType(uri) ?: "image/jpeg"
+        val mime = ctx.contentResolver.getType(uri)
+            ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(uri.lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase())
+            ?: "image/jpeg"
         val raw = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
         if (!mime.startsWith("image/") || mime == "image/gif" || raw.size < 900_000) return Pdu.Part(mime, raw, "file${System.nanoTime() % 100000}.${mime.substringAfter('/')}")
         // Decode at a reduced size first: a 50 MP photo at full size can run Orbit out of memory
@@ -211,19 +216,33 @@ object Sender {
     }.getOrNull()
 
     /** Photos/videos: through the Messages app (Google Messages mode) or as MMS (Orbit mode). */
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     suspend fun sendMedia(ctx: Context, convKey: String, uris: List<Uri>, caption: String, allowDriving: Boolean = true, queued: Boolean = false): SendResult {
         val addresses = addressesOf(convKey)
         if (addresses.isEmpty()) return SendResult(false, Route.NONE, "Orbit doesn't know this chat's numbers yet. Send photos from Google Messages this time.")
         // Only the people who talked recently: sending to them would start a new, smaller group
         if (isPartialGroup(ctx, convKey)) return SendResult(false, Route.NONE, "Orbit only knows part of this group. Open it in Google Messages once so Orbit learns everyone in it.")
         if (HubSms.isDefault(ctx)) {
-            val parts = withContext(Dispatchers.IO) { uris.mapNotNull { readForMms(ctx, it) } }
+            // Videos over the carrier limit get re-encoded smaller first
+            val ready = ArrayList<Uri>()
+            for (u in uris) {
+                val type = ctx.contentResolver.getType(u).orEmpty()
+                val size = withContext(Dispatchers.IO) { runCatching { ctx.contentResolver.openAssetFileDescriptor(u, "r")?.use { it.length } }.getOrNull() ?: -1L }
+                if (type.startsWith("video/") && (size < 0 || size > MMS_LIMIT)) {
+                    when (val r = VideoShrink.shrink(ctx, u)) {
+                        is VideoShrink.Result.Ok -> ready += Uri.fromFile(r.file)
+                        is VideoShrink.Result.TooLong -> return SendResult(false, Route.NONE, "That video is ${r.seconds / 60}:${"%02d".format(r.seconds % 60)} long, too long to fit in a text message even shrunk (about a minute max). Trim it or send a link.")
+                        is VideoShrink.Result.Failed -> return SendResult(false, Route.NONE, "Couldn't shrink that video to fit a text message (${r.why}).")
+                    }
+                } else ready += u
+            }
+            val parts = withContext(Dispatchers.IO) { ready.mapNotNull { readForMms(ctx, it) } }
             if (parts.isEmpty()) return SendResult(false, Route.NONE, "Couldn't read that file")
             // Carriers reject MMS over about 1 MB; only photos can be shrunk
             parts.firstOrNull { it.data.size > MMS_LIMIT }?.let {
                 return SendResult(false, Route.NONE, "That ${it.contentType.substringBefore('/').ifBlank { "file" }} is ${it.data.size / 1024} KB, too big for a text message (about 1 MB max). Trim it or send a link.")
             }
-            return if (HubSms.sendMms(ctx, addresses, caption.trim(), parts)) SendResult(true, Route.MMS) else SendResult(false, Route.NONE, "Couldn't send")
+            return if (HubSms.sendMms(ctx, addresses, caption.trim(), parts, subId = Hub.orbit.simFor(convKey))) SendResult(true, Route.MMS) else SendResult(false, Route.NONE, "Couldn't send")
         }
         val pkg = messagesPkg(ctx, convKey) ?: return SendResult(false, Route.NONE, "Install Google Messages to send photos")
         if (!MessagesAccessibility.running()) return SendResult(false, Route.NONE, "Turn on the Orbit accessibility service to send photos")

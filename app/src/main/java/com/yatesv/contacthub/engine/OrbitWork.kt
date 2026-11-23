@@ -229,11 +229,11 @@ class ArrivalWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p)
         val to = inputData.getString("to") ?: return Result.success()
         val text = inputData.getString("text") ?: return Result.success()
         val key = Phone.convKey(listOf(to))
-        val r = Sender.send(applicationContext, key, text, listOf(to), allowDriving = false)
+        // Through the queue: over RCS now if possible, otherwise held until it can be (never plain SMS)
+        SendQueue.add(applicationContext, key, text, drive = false, background = true, addresses = listOf(to))
         val name = Hub.contacts.cached(to)?.name ?: Phone.pretty(to)
-        OrbitNotes.show(applicationContext, ("arr$key").hashCode(),
-            if (r.ok) "📍 Told $name you arrived" else "📍 Arrival text not sent",
-            if (r.ok) "\"$text\" · ${inputData.getString("place")}" else r.error, OrbitNotes.openChat(applicationContext, key))
+        OrbitNotes.show(applicationContext, ("arr$key").hashCode(), "📍 Telling $name you arrived",
+            "\"$text\" · ${inputData.getString("place")}", OrbitNotes.openChat(applicationContext, key))
         return Result.success()
     }
 
@@ -258,11 +258,12 @@ object CallNotes {
 /** Keeps recurring scheduled texts going: after one sends, the next one is scheduled. */
 object RecurringTexts {
     suspend fun afterSent(s: com.yatesv.contacthub.data.Scheduled) {
-        val rule = Hub.orbit.repeatOf(s.id).ifBlank { return }
+        val rule = com.yatesv.contacthub.data.Recurring.anchored(Hub.orbit.repeatOf(s.id).ifBlank { return }, s.sendAt)
         val next = com.yatesv.contacthub.data.Recurring.next(s.sendAt, rule) ?: return
         val id = Hub.db.dao().schedule(com.yatesv.contacthub.data.Scheduled(convKey = s.convKey, addresses = s.addresses, body = s.body, sendAt = next))
         Hub.orbit.setRepeat(id, rule)
         Hub.orbit.setRepeat(s.id, "")
+        Hub.orbit.scheduleFiles(s.id).takeIf { it.isNotEmpty() }?.let { Hub.orbit.setScheduleFiles(id, it) }
         ScheduleWorker.enqueue(Hub.app, next - System.currentTimeMillis())
     }
 }

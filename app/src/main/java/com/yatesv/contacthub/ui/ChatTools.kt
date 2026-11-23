@@ -466,7 +466,10 @@ fun GifPicker(onDismiss: () -> Unit, onPick: (File) -> Unit) {
 
 /** Copies something your keyboard inserted (GIF, sticker, image) into Orbit's own file, before the keyboard's permission expires. */
 fun copyIncoming(ctx: Context, uri: Uri, mime: String?): File? = runCatching {
-    val ext = when { mime?.contains("gif") == true -> "gif"; mime?.contains("png") == true -> "png"; mime?.contains("webp") == true -> "webp"; else -> "jpg" }
+    // The real extension for the file's type: a video or voice note saved as .jpg went out as a broken "photo"
+    val type = mime ?: ctx.contentResolver.getType(uri)
+    val ext = type?.let { android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
+        ?: when { type == null -> "jpg"; type.startsWith("video/") -> "mp4"; type.startsWith("audio/") -> "m4a"; type.startsWith("image/") -> "jpg"; else -> "bin" }
     OutFiles.new(ctx, "kb", ext).also { f -> ctx.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { i.copyTo(it) } } ?: error("can't read") }
 }.getOrNull()
 

@@ -20,24 +20,33 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
-    // Fixed key kept in the repo so new builds install as updates (your data is kept)
+    // Release key: private, stored in GitHub secrets (ORBIT_KEYSTORE_B64 / ORBIT_KEYSTORE_PASSWORD) and
+    // written to a temp file by CI. The old key was public in this repo, so anyone could have signed a
+    // fake "update"; with a private key only these builds install over Orbit.
+    // Without the secrets (local builds) it falls back to the old shared key.
+    val releaseStore = System.getenv("ORBIT_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
     signingConfigs {
-        getByName("debug") {
+        create("legacy") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (releaseStore != null) create("release") {
+            storeFile = releaseStore
+            storePassword = System.getenv("ORBIT_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ORBIT_KEY_ALIAS") ?: "orbit"
+            keyPassword = System.getenv("ORBIT_KEY_PASSWORD") ?: System.getenv("ORBIT_KEYSTORE_PASSWORD")
+        }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("legacy")
         }
         // The build you install: optimized (R8) and not debuggable, so animations run much smoother.
-        // Signed with the same key as before, so it installs over the old version and keeps your data.
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("legacy")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -81,6 +90,10 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-gif:2.7.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // Shrinks videos to fit picture-message (MMS) size limits
+    implementation("androidx.media3:media3-transformer:1.4.1")
+    implementation("androidx.media3:media3-effect:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
     // QR code for "My contact" (encoder only)
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.osmdroid:osmdroid-android:6.1.20")

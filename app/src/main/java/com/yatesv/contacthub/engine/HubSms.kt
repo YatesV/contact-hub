@@ -28,6 +28,7 @@ object HubSms {
     private const val ACTION_SMS_SENT = "com.yatesv.contacthub.SMS_SENT"
     private const val ACTION_MMS_SENT = "com.yatesv.contacthub.MMS_SENT"
     private const val ACTION_MMS_DOWNLOADED = "com.yatesv.contacthub.MMS_DOWNLOADED"
+    private const val ACTION_SMS_DELIVERED = "com.yatesv.contacthub.SMS_DELIVERED"
     private val mmsServicePackages = listOf("com.android.phone", "com.android.mms.service", "com.samsung.android.mms.service")
 
     fun isDefault(ctx: Context) = Telephony.Sms.getDefaultSmsPackage(ctx) == ctx.packageName
@@ -45,7 +46,25 @@ object HubSms {
             )
         } + listOfNotNull(runCatching { tm.line1Number }.getOrNull()))
             .map { Phone.norm(it) }.filter { it.isNotEmpty() }.toSet()
-    }.getOrDefault(emptySet())
+    }.getOrDefault(emptySet()).ifEmpty {
+        // Some carriers hide the SIM's number: use the one learned from a 1-on-1 picture message
+        ctx.getSharedPreferences("mms", Context.MODE_PRIVATE).getString("self", null)?.let { setOf(it) } ?: emptySet()
+    }
+
+    /** Unique request codes for "sent" callbacks (rowId*10+i collided for 10+ part texts). */
+    private val reqCode = java.util.concurrent.atomic.AtomicInteger((System.currentTimeMillis() / 1000).toInt())
+    /** Texts with a part that failed: a later part succeeding must not mark them sent. */
+    private val failedRows: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** MMS downloads in progress (marked "seen" only once saved, so a failed download can be re-sent by the carrier). */
+    private val downloading: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Active SIMs (subscription id to name), for the per-chat SIM picker. Empty/one = no choice to make. */
+    fun sims(ctx: Context): List<Pair<Int, String>> = runCatching {
+        ctx.getSystemService(SubscriptionManager::class.java).activeSubscriptionInfoList.orEmpty()
+            .map { it.subscriptionId to (it.displayName?.toString()?.ifBlank { null } ?: "SIM ${it.simSlotIndex + 1}") }
+    }.getOrDefault(emptyList())
+
+    fun simName(ctx: Context, subId: Int): String? = sims(ctx).firstOrNull { it.first == subId }?.second
 
     /** SmsManager for the SIM a message came in on (S24 can have two: physical SIM + eSIM). */
     private fun smsManager(ctx: Context, subId: Int = -1): SmsManager {
@@ -64,26 +83,35 @@ object HubSms {
 
     // ---------------- Sending ----------------
 
-    fun sendSms(ctx: Context, address: String, body: String): Boolean = runCatching {
+    fun sendSms(ctx: Context, address: String, body: String, subId: Int = -1): Boolean = runCatching {
         val cr = ctx.contentResolver
         val values = ContentValues().apply {
             put(Telephony.Sms.ADDRESS, address); put(Telephony.Sms.BODY, body)
             put(Telephony.Sms.DATE, System.currentTimeMillis()); put(Telephony.Sms.READ, 1); put(Telephony.Sms.SEEN, 1)
             put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_OUTBOX)
+            put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_PENDING)
             put(Telephony.Sms.THREAD_ID, thread(ctx, listOf(address)))
+            if (subId >= 0) put(Telephony.Sms.SUBSCRIPTION_ID, subId)
         }
         val row = cr.insert(Telephony.Sms.CONTENT_URI, values)
-        val sm = smsManager(ctx)
+        val sm = smsManager(ctx, subId)
         val parts = sm.divideMessage(body)
         val sent = ArrayList<PendingIntent>()
         parts.forEachIndexed { i, _ ->
-            sent += PendingIntent.getBroadcast(ctx, (row?.lastPathSegment?.toIntOrNull() ?: 0) * 10 + i,
+            sent += PendingIntent.getBroadcast(ctx, reqCode.incrementAndGet(),
                 Intent(ctx, SmsStatusReceiver::class.java).setAction(ACTION_SMS_SENT).setData(row)
                     .putExtra("last", i == parts.size - 1),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
-        if (parts.size > 1) sm.sendMultipartTextMessage(address, null, parts, sent, null)
-        else sm.sendTextMessage(address, null, body, sent.first(), null)
+        // Delivery reports: "Delivered" under the message once it reaches their phone
+        val delivered = ArrayList<PendingIntent>()
+        parts.forEachIndexed { i, _ ->
+            delivered += PendingIntent.getBroadcast(ctx, reqCode.incrementAndGet(),
+                Intent(ctx, SmsStatusReceiver::class.java).setAction(ACTION_SMS_DELIVERED).setData(row).putExtra("last", i == parts.size - 1),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+        }
+        if (parts.size > 1) sm.sendMultipartTextMessage(address, null, parts, sent, delivered)
+        else sm.sendTextMessage(address, null, body, sent.first(), delivered.first())
         Hub.changed()
         true
     }.getOrDefault(false)
@@ -96,7 +124,7 @@ object HubSms {
     }
 
     /** Group texts and photos go out as MMS. */
-    fun sendMms(ctx: Context, addresses: List<String>, body: String, attachments: List<Pdu.Part> = emptyList()): Boolean = runCatching {
+    fun sendMms(ctx: Context, addresses: List<String>, body: String, attachments: List<Pdu.Part> = emptyList(), subId: Int = -1): Boolean = runCatching {
         cleanTemp(ctx)
         val pdu = Pdu.sendReq(addresses, body, attachments)
         val f = File(ctx.cacheDir, "mms-out-${System.currentTimeMillis()}.pdu").apply { writeBytes(pdu) }
@@ -104,7 +132,7 @@ object HubSms {
         val sent = PendingIntent.getBroadcast(ctx, f.name.hashCode(),
             Intent(ctx, SmsStatusReceiver::class.java).setAction(ACTION_MMS_SENT).setData(msgUri).putExtra("file", f.absolutePath),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-        smsManager(ctx).sendMultimediaMessage(ctx, shareFile(ctx, f, write = false), null, null, sent)
+        smsManager(ctx, subId).sendMultimediaMessage(ctx, shareFile(ctx, f, write = false), null, null, sent)
         Hub.changed()
         true
     }.getOrDefault(false)
@@ -174,16 +202,23 @@ object HubSms {
     }
 
     /** New message arrived (default-app mode): notify, auto-reply, refresh screens. */
-    private suspend fun incoming(ctx: Context, key: String, from: String, body: String, isGroup: Boolean) {
-        Hub.changed()
+    private suspend fun incoming(ctx: Context, key: String, from: String, body: String, isGroup: Boolean, image: Uri? = null) {
         val s = Hub.settings.value
+        // A new message brings an archived chat back to the inbox (like Google Messages)
+        if (Reactions.parse(body) == null) runCatching {
+            Hub.db.dao().let { d -> d.meta(key)?.takeIf { it.archived }?.let { d.putMeta(it.copy(archived = false)) } }
+        }
+        Hub.changed()
         val name = Hub.contacts.cached(from)?.name ?: Phone.pretty(from)
         val isReaction = s.convertReactions && Reactions.parse(body) != null
         if (Hub.openConv != key && !isReaction) {
-            Notifier.showMessage(ctx, key, Notifier.displayName(key), isGroup, listOf(name to body),
+            // Keep the last few unread lines so the notification shows the conversation, not just the newest text
+            val lines = Notifier.recent.compute(key) { _, old -> ((old ?: emptyList()) + (name to body)).takeLast(6) }!!
+            Notifier.showMessage(ctx, key, Notifier.displayName(key), isGroup, lines, image = image,
                 mention = isGroup && s.myName.isNotBlank() && body.contains(s.myName, true))
         }
-        if (s.autoReplyOn && !isGroup && !isReaction) {
+        val shortCode = key.all { it.isDigit() } && key.length < 7   // banks, 2FA, carriers
+        if (s.autoReplyOn && !isGroup && !isReaction && !shortCode) {
             val prefs = ctx.getSharedPreferences("listener", Context.MODE_PRIVATE)
             if (System.currentTimeMillis() - prefs.getLong("auto:$key", 0) > 15 * 60_000) {
                 prefs.edit().putLong("auto:$key", System.currentTimeMillis()).apply()
@@ -201,19 +236,21 @@ object HubSms {
         // Carriers sometimes send the same notice twice; download each MMS once
         val seen = ctx.getSharedPreferences("mms", Context.MODE_PRIVATE)
         val id = n.transactionId.ifBlank { n.contentLocation }
-        if (seen.contains(id)) return
-        seen.edit().putLong(id, System.currentTimeMillis()).apply()
+        if (seen.contains(id) || !downloading.add(id)) return
         val subId = intent.getIntExtra("android.telephony.extra.SUBSCRIPTION_INDEX", intent.getIntExtra("subscription", -1))
         val f = File(ctx.cacheDir, "mms-in-${System.currentTimeMillis()}.pdu").apply { createNewFile() }
         val done = PendingIntent.getBroadcast(ctx, f.name.hashCode(),
             Intent(ctx, SmsStatusReceiver::class.java).setAction(ACTION_MMS_DOWNLOADED)
-                .putExtra("file", f.absolutePath).putExtra("tid", n.transactionId).putExtra("loc", n.contentLocation).putExtra("sub", subId),
+                .putExtra("file", f.absolutePath).putExtra("tid", n.transactionId).putExtra("loc", n.contentLocation).putExtra("sub", subId)
+                .putExtra("seenId", id),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
         runCatching { smsManager(ctx, subId).downloadMultimediaMessage(ctx, n.contentLocation, shareFile(ctx, f, write = true), null, done) }
-            .onFailure { com.yatesv.contacthub.data.HubLog.w("MMS", "download start failed", it) }
+            .onFailure { com.yatesv.contacthub.data.HubLog.w("MMS", "download start failed", it); downloading.remove(id) }
     }
 
     suspend fun onMmsDownloaded(ctx: Context, intent: Intent) {
+        val seenId = intent.getStringExtra("seenId").orEmpty()
+        downloading.remove(seenId)
         val f = File(intent.getStringExtra("file") ?: return)
         val bytes = runCatching { f.readBytes() }.getOrNull()
         f.delete()
@@ -227,14 +264,21 @@ object HubSms {
             return
         }
         val me = myNumbers(ctx).toMutableSet()
-        // If we don't know our own number and there's exactly one recipient, that recipient is us
-        if (me.isEmpty() && (m.to.size + m.cc.size) == 1) (m.to + m.cc).firstOrNull()?.let { me += Phone.norm(it) }
+        // If we don't know our own number and there's exactly one recipient, that recipient is us (remember it for group texts)
+        if (me.isEmpty() && (m.to.size + m.cc.size) == 1) (m.to + m.cc).firstOrNull()?.let { mine ->
+            me += Phone.norm(mine)
+            ctx.getSharedPreferences("mms", Context.MODE_PRIVATE).edit().putString("self", Phone.norm(mine)).apply()
+        }
+        if (me.isEmpty() && (m.to.size + m.cc.size) > 1)
+            com.yatesv.contacthub.data.HubLog.w("MMS", "group MMS but own number unknown: the thread may include you")
         val members = (listOf(m.from) + m.to + m.cc).map { it.trim() }.filter { it.isNotBlank() && Phone.norm(it) !in me }.distinctBy { Phone.norm(it) }
         val text = m.parts.filter { it.contentType == "text/plain" }.joinToString("\n") { it.text() }.trim()
         val media = m.parts.filter { it.contentType.startsWith("image/") || it.contentType.startsWith("video/") || it.contentType.startsWith("audio/") }
-        saveMms(ctx, Telephony.Mms.MESSAGE_BOX_INBOX, members, m.from, text, media,
+        val saved = saveMms(ctx, Telephony.Mms.MESSAGE_BOX_INBOX, members, m.from, text, media,
             if (m.date > 0) m.date * 1000 else System.currentTimeMillis(), read = false, mType = Pdu.RETRIEVE_CONF,
             subject = m.subject, messageId = m.messageId, transactionId = intent.getStringExtra("tid").orEmpty())
+        // Only now is it really received: carriers' repeat notices for it can be ignored
+        if (saved != null && seenId.isNotBlank()) ctx.getSharedPreferences("mms", Context.MODE_PRIVATE).edit().putLong(seenId, System.currentTimeMillis()).apply()
         // Tell the carrier we got it
         intent.getStringExtra("tid")?.takeIf { it.isNotBlank() }?.let { tid ->
             runCatching {
@@ -243,7 +287,16 @@ object HubSms {
             }
         }
         val key = Phone.convKey(members)
-        incoming(ctx, key, m.from, text.ifBlank { if (media.isNotEmpty()) "📷 Photo" else "" }, isGroup = members.size > 1)
+        // The photo itself in the notification (a copy the system's notification shade can read)
+        val image = media.firstOrNull { it.contentType.startsWith("image/") && !it.contentType.contains("gif") }?.let { p ->
+            runCatching {
+                val f = File(ctx.cacheDir, "mms-notif-${System.currentTimeMillis()}.jpg").apply { writeBytes(p.data) }
+                FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f).also { u ->
+                    ctx.grantUriPermission("com.android.systemui", u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }.getOrNull()
+        }
+        incoming(ctx, key, m.from, text.ifBlank { if (media.isNotEmpty()) "📷 Photo" else "" }, isGroup = members.size > 1, image = image)
     }
 
     fun onSent(ctx: Context, intent: Intent, resultCode: Int) {
@@ -251,11 +304,24 @@ object HubSms {
         val ok = resultCode == android.app.Activity.RESULT_OK
         when (intent.action) {
             ACTION_SMS_SENT -> runCatching {
-                if (!ok || intent.getBooleanExtra("last", true)) {
-                    ctx.contentResolver.update(uri, ContentValues().apply {
-                        put(Telephony.Sms.TYPE, if (ok) Telephony.Sms.MESSAGE_TYPE_SENT else Telephony.Sms.MESSAGE_TYPE_FAILED)
-                    }, null, null)
+                // Long texts report each part: one failed part = the whole text failed, never back to "sent"
+                if (!ok) failedRows += uri.toString()
+                val type = when {
+                    !ok -> Telephony.Sms.MESSAGE_TYPE_FAILED
+                    intent.getBooleanExtra("last", true) && uri.toString() !in failedRows -> Telephony.Sms.MESSAGE_TYPE_SENT
+                    else -> null
                 }
+                if (type != null) ctx.contentResolver.update(uri, ContentValues().apply { put(Telephony.Sms.TYPE, type) }, null, null)
+            }
+            ACTION_SMS_DELIVERED -> runCatching {
+                // The report carries the carrier's status: below 0x20 = delivered, 0x40+ = failed
+                val pdu = intent.getByteArrayExtra("pdu")
+                val st = pdu?.let { android.telephony.SmsMessage.createFromPdu(it, intent.getStringExtra("format")) }?.status ?: 0
+                val value = when { st < 0x20 -> Telephony.Sms.STATUS_COMPLETE; st >= 0x40 -> Telephony.Sms.STATUS_FAILED; else -> Telephony.Sms.STATUS_PENDING }
+                if (value != Telephony.Sms.STATUS_COMPLETE || intent.getBooleanExtra("last", true))
+                    ctx.contentResolver.update(uri, ContentValues().apply { put(Telephony.Sms.STATUS, value) }, null, null)
+                Hub.changed()
+                return
             }
             ACTION_MMS_SENT -> {
                 runCatching {

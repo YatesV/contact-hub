@@ -104,19 +104,20 @@ interface HubDao {
     @Query("SELECT * FROM ConvMeta WHERE `key` = :key") suspend fun meta(key: String): ConvMeta?
     @Upsert suspend fun putMeta(m: ConvMeta)
 
-    @Query("SELECT * FROM LocalMessage WHERE convKey = :key ORDER BY date") fun localFlow(key: String): Flow<List<LocalMessage>>
     @Query("SELECT * FROM LocalMessage WHERE convKey = :key ORDER BY date") suspend fun local(key: String): List<LocalMessage>
     @Query("SELECT * FROM LocalMessage ORDER BY date") suspend fun allLocal(): List<LocalMessage>
-    @Query("SELECT * FROM LocalMessage ORDER BY date") fun allLocalFlow(): Flow<List<LocalMessage>>
     @Query("SELECT COUNT(*) FROM LocalMessage WHERE convKey = :key AND body = :body AND outgoing = :out AND date > :since")
     suspend fun countSimilar(key: String, body: String, out: Boolean, since: Long): Int
     @Insert suspend fun addLocal(m: LocalMessage): Long
     @Query("UPDATE LocalMessage SET source = :source WHERE id = :id") suspend fun setLocalSource(id: Long, source: String)
     @Query("DELETE FROM LocalMessage WHERE id = :id") suspend fun deleteLocal(id: Long)
+    @Query("UPDATE LocalMessage SET convKey = :to WHERE convKey = :from") suspend fun moveLocal(from: String, to: String)
+    @Query("UPDATE Reaction SET convKey = :to WHERE convKey = :from") suspend fun moveReactions(from: String, to: String)
 
     @Query("SELECT * FROM Reaction WHERE convKey = :key") fun reactionsFlow(key: String): Flow<List<Reaction>>
     @Query("SELECT * FROM Reaction WHERE pending = 1 ORDER BY date") suspend fun pendingReactions(): List<Reaction>
     @Query("SELECT * FROM Reaction") suspend fun allReactions(): List<Reaction>
+    @Query("SELECT * FROM Reaction WHERE convKey = :key") suspend fun reactionsFor(key: String): List<Reaction>
     @Query("SELECT * FROM Reaction WHERE convKey = :key AND msgKey = :msgKey AND fromMe = :fromMe AND emoji = :emoji LIMIT 1")
     suspend fun findReaction(key: String, msgKey: String, fromMe: Boolean, emoji: String): Reaction?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addReaction(r: Reaction): Long
@@ -139,6 +140,7 @@ interface HubDao {
     /** Sends that got cut off (phone restarted mid-send) are marked failed rather than retried, to avoid doubles. */
     @Query("UPDATE Scheduled SET status = 'failed' WHERE status = 'sending' AND sendAt < :before") suspend fun failStuckScheduled(before: Long): Int
     @Query("DELETE FROM Scheduled WHERE id = :id") suspend fun deleteScheduled(id: Long)
+    @Query("UPDATE Scheduled SET body = :body WHERE id = :id AND status = 'waiting'") suspend fun updateScheduledBody(id: Long, body: String)
     @Query("SELECT * FROM Scheduled WHERE status = 'sending'") suspend fun sendingScheduled(): List<Scheduled>
 
     @Query("SELECT * FROM Folder ORDER BY sort, id") fun foldersFlow(): Flow<List<Folder>>

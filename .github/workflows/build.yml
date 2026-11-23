@@ -28,9 +28,23 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Private signing key from repo secrets (never in the repo). Missing = old shared key.
+      - name: Signing key
+        env:
+          KEY_B64: ${{ secrets.ORBIT_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEY_B64" ]; then
+            echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/orbit-release.jks"
+            echo "ORBIT_KEYSTORE=$RUNNER_TEMP/orbit-release.jks" >> "$GITHUB_ENV"
+            echo "Signing with the private Orbit key"
+          else
+            echo "::warning::ORBIT_KEYSTORE_B64 secret not set: signing with the old shared key"
+          fi
+
       - name: Test and build APK
         env:
           VERSION_CODE: ${{ github.run_number }}
+          ORBIT_KEYSTORE_PASSWORD: ${{ secrets.ORBIT_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest assembleRelease --no-daemon

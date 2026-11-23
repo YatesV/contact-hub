@@ -268,7 +268,7 @@ class MessagesAccessibility : AccessibilityService() {
         } else startActivity(intent)
     }
 
-    private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>, convKey: String, forced: String?): DriveResult {
+    private suspend fun doSend(pkg: String, addresses: List<String>, body: String, media: List<Uri>, convKey: String, forced: String?, replyTo: String? = null): DriveResult {
         returnToOrbit = AppState.foreground
         val want = norm(body)
         val how = method(forced)
@@ -336,6 +336,26 @@ class MessagesAccessibility : AccessibilityService() {
                 clearDraft(pkg)
                 return DriveResult(false, type, "couldn't find the Send button")
             }
+            // 1b. Replying to a message: long-press it and tap Reply, so it goes as a real RCS reply.
+            //     If that doesn't work, it just sends the text (no quote line).
+            if (replyTo != null && media.isEmpty() && type != "sms") {
+                val replied = tapReply(pkg, replyTo)
+                HubLog.d("RcsSender", "native reply ${if (replied) "set" else "not available, sending plain"}")
+                // The composer can rebuild in reply mode: find Send again and make sure our text is still there
+                val t1 = System.currentTimeMillis()
+                var again: AccessibilityNodeInfo? = null
+                while (System.currentTimeMillis() - t1 < 2500) {
+                    delay(80)
+                    val r = root(pkg) ?: continue
+                    val nodes = all(r)
+                    val input = findInput(nodes) ?: continue
+                    if (norm(inputText(input)) != want) { setText(input, body); continue }
+                    val sb = findSend(r, nodes) ?: continue
+                    val target = clickable(sb) ?: sb
+                    if (target.isEnabled) { again = target; break }
+                }
+                send = again ?: send
+            }
             // 2. Tap Send once, then make sure the chat's text box is there AND empty. That's the only
             //    thing we count as "sent". Never tap twice, and never fall back to SMS after tapping
             //    (Messages might still send it a moment later, and it would go out twice).
@@ -363,6 +383,38 @@ class MessagesAccessibility : AccessibilityService() {
         }
     }
 
+    /** Finds the newest bubble showing [body] in the open chat. */
+    private fun findBubble(nodes: List<AccessibilityNodeInfo>, body: String): AccessibilityNodeInfo? {
+        val want = norm(body)
+        if (want.isEmpty()) return null
+        return nodes.lastOrNull { n ->
+            if (n.isEditable) return@lastOrNull false
+            val t = norm(n.text?.toString().orEmpty())
+            val d = norm(n.contentDescription?.toString().orEmpty())
+            t == want || (want.length >= 6 && (t.contains(want) || d.contains(want)))
+        }
+    }
+
+    /** Long-presses the message and taps Messages' own Reply. True if reply mode was turned on. */
+    private suspend fun tapReply(pkg: String, body: String): Boolean {
+        val r = root(pkg) ?: return false
+        val b = findBubble(all(r), body) ?: return false
+        fun sig(n: AccessibilityNodeInfo) = "${n.className}|${n.viewIdResourceName}|${n.text}|${n.contentDescription}"
+        val before = pkgRoots(pkg).flatMap { all(it) }.map(::sig).toHashSet()
+        val longTarget = generateSequence(b) { it.parent }.take(6).firstOrNull { it.isLongClickable } ?: clickable(b) ?: b
+        if (!longTarget.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) return false
+        val t0 = System.currentTimeMillis()
+        while (System.currentTimeMillis() - t0 < 2500) {
+            delay(120)
+            val fresh = pkgRoots(pkg).flatMap { all(it) }.filter { sig(it) !in before || label(it) == "reply" }
+            val reply = fresh.firstOrNull { label(it) == "reply" } ?: continue
+            return (clickable(reply) ?: reply).performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        // No Reply option: close the menu we opened
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return false
+    }
+
     /** Empties the Messages text box so a failed message doesn't get sent later by accident. */
     private fun clearDraft(pkg: String) {
         runCatching { root(pkg)?.let { r -> findInput(all(r))?.let { setText(it, "") } } }
@@ -388,17 +440,13 @@ class MessagesAccessibility : AccessibilityService() {
                 val r = root(pkg) ?: continue
                 val nodes = all(r)
                 val input = findInput(nodes) ?: continue
-                type = chatType(findSend(r, nodes), input).ifEmpty { knownType }
+                // Live only: a remembered "rcs" can be stale, and reacting on SMS sends a "Liked …" text
+                type = chatType(findSend(r, nodes), input)
                 // Only react on RCS. On SMS the Messages app sends it as a "Liked …" text, which looks fake.
                 if (type == "sms") return DriveResult(false, "sms", "this chat is on SMS right now")
                 if (type.isEmpty() && System.currentTimeMillis() - start < 3000) continue
                 if (type.isEmpty()) return DriveResult(false, "", "couldn't tell if this chat is on RCS")
-                bubble = nodes.lastOrNull { n ->
-                    if (n.isEditable) return@lastOrNull false
-                    val t = norm(n.text?.toString().orEmpty())
-                    val d = norm(n.contentDescription?.toString().orEmpty())
-                    t == want || (want.length >= 6 && (t.contains(want) || d.contains(want)))
-                }
+                bubble = findBubble(nodes, want)
                 if (bubble != null) break
             }
             HubLog.d("RcsReact", "chat type=$type bubbleFound=${bubble != null} emoji=$emoji")
@@ -416,7 +464,8 @@ class MessagesAccessibility : AccessibilityService() {
                 if (fresh.isEmpty()) continue
                 fun label(n: AccessibilityNodeInfo) = n.text?.toString().orEmpty() to n.contentDescription?.toString()?.lowercase().orEmpty()
                 val chip = fresh.firstOrNull { n -> val (t, d) = label(n); t == emoji || d == emoji }
-                    ?: fresh.firstOrNull { n -> val (_, d) = label(n); d.length < 40 && names.any { d.contains(it) } } ?: continue
+                    // Whole words only: "like" must not match "dislike"
+                    ?: fresh.firstOrNull { n -> val (_, d) = label(n); d.length < 40 && names.any { nm -> Regex("(^|[^a-z])${Regex.escape(nm)}([^a-z]|$)").containsMatchIn(d) } } ?: continue
                 val ok = (clickable(chip) ?: chip).performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 return DriveResult(ok, type, if (ok) "" else "couldn't tap the reaction")
             }
@@ -442,11 +491,11 @@ class MessagesAccessibility : AccessibilityService() {
         }
 
         suspend fun sendThrough(ctx: Context, pkg: String, addresses: List<String>, body: String, media: List<Uri> = emptyList(),
-                                convKey: String = "", forcedHide: String? = null): DriveResult =
+                                convKey: String = "", forcedHide: String? = null, replyTo: String? = null): DriveResult =
             lock.withLock {
                 val svc = instance ?: return DriveResult(false, why = "Accessibility service is off")
                 withContext(Dispatchers.Main) {
-                    runCatching { svc.doSend(pkg, addresses, body, media, convKey, forcedHide) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
+                    runCatching { svc.doSend(pkg, addresses, body, media, convKey, forcedHide, replyTo) }.getOrElse { DriveResult(false, why = it.message ?: "Error") }
                 }
             }
 

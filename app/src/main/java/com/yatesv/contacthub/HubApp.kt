@@ -39,6 +39,7 @@ data class ReplyHandle(
 /** App-wide singletons. */
 object Hub {
     lateinit var app: Context
+    fun isReady() = ::app.isInitialized
     lateinit var db: HubDb
     lateinit var settings: SettingsStore
     lateinit var sms: SmsRepo
@@ -98,6 +99,16 @@ class HubApp : Application() {
             runCatching { com.yatesv.contacthub.engine.DailyWorker.schedule(this@HubApp) }
             runCatching { scheduleWork(this@HubApp) }.onFailure { com.yatesv.contacthub.data.HubLog.w("App", "scheduleWork failed", it) }
             runCatching { Hub.contacts.all() }
+            // Messages that were waiting/held when Orbit was last closed
+            runCatching { com.yatesv.contacthub.engine.SendQueue.restore(this@HubApp) }
+        }
+        // Unlocking the phone: held messages can go over RCS now (Google Messages can be opened again)
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(this, object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, i: android.content.Intent) {
+                    if (com.yatesv.contacthub.engine.SendQueue.heldCount() > 0) com.yatesv.contacthub.engine.SendQueue.wakeHeld(c, drive = true)
+                }
+            }, android.content.IntentFilter(android.content.Intent.ACTION_USER_PRESENT), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         }
     }
 

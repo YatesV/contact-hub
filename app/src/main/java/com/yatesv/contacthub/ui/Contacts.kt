@@ -152,7 +152,8 @@ fun ContactsScreen() {
                 leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search ${list?.size ?: ""} contacts") })
             GroupChips(groupFilter, { groupFilter = it }) { manageGroups = true }
             if (manageGroups) GroupsDialog(list.orEmpty()) { manageGroups = false }
-            LazyColumn(Modifier.fillMaxSize(), flingBehavior = rememberScrollFling(Hub.settings.flow.collectAsState().value.scrollSpeed)) {
+            val sp = rememberSpeedScroll(Hub.settings.flow.collectAsState().value.scrollSpeed)
+            LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
                 if (q.isBlank() && groupFilter.isBlank()) item { FriendSyncCard() }
                 if (favorites.isNotEmpty() && q.isBlank() && groupFilter.isBlank()) {
                     item { SectionTitle("Favorites") }
@@ -215,8 +216,8 @@ fun ContactScreen(number: String) {
         birthday = contact?.let { Hub.contacts.birthday(it.id) }
         calls = Hub.contacts.calls(number)
         val thread = Hub.sms.threadIdFor(Phone.convKey(listOf(number)))
-        media = Hub.sms.media(thread)
-        val (count, days) = Hub.sms.statsFor(thread)
+        media = runCatching { Hub.sms.media(thread) }.getOrDefault(media)
+        val (count, days) = runCatching { Hub.sms.statsFor(thread) }.getOrElse { com.yatesv.contacthub.data.HubLog.w("Contact", "stats failed", it); 0 to emptySet() }
         val tz = java.util.TimeZone.getDefault()
         val now = System.currentTimeMillis()
         msgCount = count + dao.local(Phone.convKey(listOf(number))).size
@@ -505,7 +506,7 @@ private fun Stat(value: String, label: String) {
 }
 
 @Composable
-fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = null, onLong: (() -> Unit)? = null) {
+fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = null, onLong: (() -> Unit)? = null, count: Int = 1) {
     val (icon, color) = when (c.type) {
         CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> Icons.AutoMirrored.Filled.CallMissed to MaterialTheme.colorScheme.error
         CallLog.Calls.OUTGOING_TYPE -> Icons.AutoMirrored.Filled.CallMade to MaterialTheme.colorScheme.primary
@@ -519,10 +520,12 @@ fun CallRow(c: CallEntry, showName: Boolean = true, onClick: (() -> Unit)? = nul
             val n = Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number)
             Avatar(n, Hub.contacts.cached(c.number)?.photo, 40.dp); Spacer(Modifier.width(12.dp))
         }
-        Icon(icon, null, Modifier.size(18.dp), tint = color)
+        Icon(icon, when (c.type) {
+            CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> "Missed call"; CallLog.Calls.OUTGOING_TYPE -> "Outgoing call"
+            CallLog.Calls.BLOCKED_TYPE -> "Blocked call"; else -> "Incoming call" }, Modifier.size(18.dp), tint = color)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            if (showName) Text(Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number),
+            if (showName) Text((Hub.contacts.cached(c.number)?.name ?: c.name ?: Phone.pretty(c.number)) + if (count > 1) " ($count)" else "",
                 color = if (c.type == CallLog.Calls.MISSED_TYPE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
             Text(fullTime(c.date) + if (c.duration > 0) " · ${talkTime(c.duration)}" else "", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -66,6 +66,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -110,7 +113,7 @@ object InboxData {
     fun nameFor(key: String, addresses: List<String>, meta: ConvMeta?, groupName: String?): String {
         if (!groupName.isNullOrBlank()) return groupName
         if (!meta?.customName.isNullOrBlank()) return meta!!.customName
-        if (key.startsWith("g:")) return key.removePrefix("g:")
+        if (Phone.isNameKey(key)) return Phone.nameOf(key)
         val list = addresses.ifEmpty { key.split(',') }
         return list.joinToString(", ") { a -> Hub.contacts.cached(a)?.name?.let { if (list.size > 1) it.substringBefore(' ') else it } ?: Phone.pretty(a) }
     }
@@ -159,7 +162,7 @@ object InboxData {
         for ((key, list) in locals) {
             if (key in seen) continue
             val last = list.last()
-            rows += row(key, 0, if (key.startsWith("g:")) emptyList() else key.split(','), last.body, last.date, 0)
+            rows += row(key, 0, Phone.addresses(key), last.body, last.date, 0)
         }
         return rows.sortedWith(compareByDescending<ConvRow> { it.meta.pinned }.thenByDescending { it.date })
     }
@@ -264,13 +267,16 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
         Column(Modifier.padding(pad).fillMaxSize().recedeBehind(actionsFor != null || snoozeFor != null || folderFor != null, settings.foldIntensity)) {
             if (mode == InboxMode.NORMAL) UpdateBanner()
             androidx.compose.animation.AnimatedVisibility(banner.isNotBlank()) { Banner(banner) { Hub.banner.value = "" } }
-            if (l360Status.isNotBlank() && mode == InboxMode.NORMAL) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) {}
-            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected && !com.yatesv.contacthub.engine.HubSms.isDefault(ctx)) {
-                Banner("Turn on notification access so RCS chats and replies work.", "Open", { openListener(ctx) }) { Hub.banner.value = "" }
+            // ✕ hides these until the message changes / Orbit restarts
+            var l360Closed by remember(l360Status) { mutableStateOf(false) }
+            if (l360Status.isNotBlank() && mode == InboxMode.NORMAL && !l360Closed) Banner(l360Status, "Fix", { Nav.go(Screen.SettingsPage("life360")) }) { l360Closed = true }
+            var listenerClosed by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+            if (mode == InboxMode.NORMAL && settings.engine == "auto" && !MessagesListener.connected && !com.yatesv.contacthub.engine.HubSms.isDefault(ctx) && !listenerClosed) {
+                Banner("Turn on notification access so RCS chats and replies work.", "Open", { openListener(ctx) }) { listenerClosed = true }
             }
             when {
                 rows == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.material3.CircularProgressIndicator() }
-                else -> LazyColumn(Modifier.fillMaxSize(), flingBehavior = rememberScrollFling(settings.scrollSpeed)) {
+                else -> { val sp = rememberSpeedScroll(settings.scrollSpeed); LazyColumn(Modifier.fillMaxSize().then(sp.modifier), state = sp.state, userScrollEnabled = sp.native) {
                     if (mode == InboxMode.NORMAL) item(key = "search") { SearchPill { Nav.go(Screen.Search) } }
                     if (mode == InboxMode.NORMAL && settings.showCategories) item(key = "chips") {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
@@ -306,7 +312,7 @@ fun InboxScreen(mode: InboxMode = InboxMode.NORMAL) {
                         } }
                     }
                     item { Spacer(Modifier.height(24.dp)) }
-                }
+                } }
             }
         }
     }
@@ -437,7 +443,9 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit) {
         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh, Motion.spec(), label = "pill")
     Text(label, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
         style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp))
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg)
+            // Screen readers: a tab-like filter that says whether it's picked
+            .androidx_selectable(selected, onClick).padding(horizontal = 14.dp, vertical = 7.dp))
 }
 
 /** Pinned chats as big circles at the top. */
@@ -473,7 +481,11 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
     val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         Modifier.fillMaxWidth().pressScale(press, 0.985f)
-            .combinedClickable(press, androidx.compose.material3.ripple(), onClick = onClick, onLongClick = onLong).padding(start = 6.dp, end = 16.dp),
+            .combinedClickable(press, androidx.compose.material3.ripple(), onClick = onClick, onLongClick = onLong,
+                onClickLabel = "Open chat", onLongClickLabel = "Chat options")
+            // Screen readers hear "unread" and the latest message in one go
+            .semanticsUnread(r.unread)
+            .padding(start = 6.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Unread dot lives in the left margin, so names stay aligned
@@ -510,7 +522,7 @@ fun ConvItem(r: ConvRow, onClick: () -> Unit, onLong: () -> Unit) {
 @Composable
 fun NewChatScreen() {
     var query by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    var picked by remember { mutableStateOf(Nav.newChatPrefill.map { (Hub.contacts.cached(it)?.name ?: Phone.pretty(it)) to it }.also { Nav.newChatPrefill = emptyList() }) }
     var contacts by remember { mutableStateOf(emptyList<com.yatesv.contacthub.data.ContactInfo>()) }
     LaunchedEffect(Unit) { contacts = Hub.contacts.all() }
     val matches = contacts.filter { query.isBlank() || it.name.contains(query, true) || Phone.norm(it.number).contains(Phone.norm(query)) }
@@ -560,9 +572,10 @@ fun SearchScreen() {
     LaunchedEffect(q) {
         if (q.length < 2) { hits = emptyList(); return@LaunchedEffect }
         kotlinx.coroutines.delay(250)
-        val sms = runCatching { Hub.sms.search(q) }.getOrDefault(emptyList()).map { Triple(Phone.convKey(listOf(it.address)), it.address, it.msg) }
+        // Texts, group/picture-message text, and RCS messages Orbit saw
+        val sms = runCatching { Hub.sms.search(q) }.getOrDefault(emptyList()).map { Triple(it.key.ifBlank { Phone.convKey(listOf(it.address)) }, it.address, it.msg) }
         val local = Hub.db.dao().allLocal().filter { it.body.contains(q, true) }
-            .map { Triple(it.convKey, it.convKey, com.yatesv.contacthub.data.Msg("l:${it.id}", it.body, it.date, it.outgoing)) }
+            .map { Triple(it.convKey, "", com.yatesv.contacthub.data.Msg("l:${it.id}", it.body, it.date, it.outgoing)) }
         hits = (sms + local).sortedByDescending { it.third.date }
     }
     Scaffold(topBar = {
@@ -571,9 +584,9 @@ fun SearchScreen() {
         }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
     }) { pad ->
         LazyColumn(Modifier.padding(pad)) {
-            items(hits) { (key, addr, m) ->
-                SettingRow(InboxData.nameFor(key, listOf(addr), null, null), "${if (m.outgoing) "You: " else ""}${m.body}",
-                    onClick = { Nav.go(Screen.Chat(key)) }) { Text(shortTime(m.date), style = MaterialTheme.typography.labelSmall) }
+            items(hits, key = { it.first + "|" + it.third.key }) { (key, _, m) ->
+                SettingRow(InboxData.nameFor(key, Phone.addresses(key), null, null), "${if (m.outgoing) "You: " else ""}${m.body}",
+                    onClick = { Nav.openAt(key, m.key, m.body, m.date) }) { Text(shortTime(m.date), style = MaterialTheme.typography.labelSmall) }
             }
         }
     }
@@ -589,8 +602,8 @@ fun StarredScreen() {
     }) { pad ->
         if (starred.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Star, "No starred messages", "Long-press a message and tap Star.") }
         LazyColumn(Modifier.padding(pad)) {
-            items(starred) { s ->
-                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null), s.body, onClick = { Nav.go(Screen.Chat(s.convKey)) }) {
+            items(starred, key = { it.msgKey }) { s ->
+                SettingRow(InboxData.nameFor(s.convKey, Phone.addresses(s.convKey), null, null), s.body, onClick = { Nav.openAt(s.convKey, s.msgKey, s.body, s.date) }) {
                     TextButton({ scope.launch { Hub.db.dao().unstar(s.msgKey) } }) { Text("Unstar") }
                 }
             }
@@ -606,15 +619,50 @@ fun ScheduledScreen() {
     Scaffold(topBar = {
         TopAppBar(title = { Text("Scheduled") }, navigationIcon = { IconButton({ Nav.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
     }) { pad ->
-        if (list.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Schedule, "Nothing scheduled", "In a chat, tap the clock next to Send.") }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var editing by remember { mutableStateOf<com.yatesv.contacthub.data.Scheduled?>(null) }
+        if (list.isEmpty()) Box(Modifier.padding(pad)) { EmptyState(Icons.Default.Schedule, "Nothing scheduled", "In a chat, type a message, tap +, then Schedule message.") }
         LazyColumn(Modifier.padding(pad)) {
-            items(list) { s ->
-                SettingRow(InboxData.nameFor(s.convKey, emptyList(), null, null),
+            items(list, key = { it.id }) { s ->
+                SettingRow(InboxData.nameFor(s.convKey, Phone.addresses(s.convKey), null, null),
                     "${fullTime(s.sendAt)}" + Hub.orbit.repeatOf(s.id).let { r -> if (r.isBlank()) "" else " · ${com.yatesv.contacthub.data.Recurring.label(r).lowercase()}" } + "\n${s.body}",
-                    onClick = { Nav.go(Screen.Chat(s.convKey)) }) {
+                    onClick = { editing = s }) {
                     TextButton({ scope.launch { Hub.db.dao().deleteScheduled(s.id); Hub.orbit.setRepeat(s.id, "") } }) { Text("Cancel") }
                 }
             }
         }
+        editing?.let { s ->
+            var body by remember(s.id) { mutableStateOf(s.body) }
+            AlertDialog(
+                onDismissRequest = { editing = null },
+                title = { Text("Scheduled for ${fullTime(s.sendAt)}") },
+                text = { OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth(), label = { Text("Message") }) },
+                confirmButton = { Row {
+                    TextButton({
+                        editing = null
+                        scope.launch {
+                            val dao = Hub.db.dao()
+                            if (dao.claimScheduled(s.id) == 0) return@launch   // already going out
+                            val files = Hub.orbit.scheduleFiles(s.id)
+                            com.yatesv.contacthub.engine.SendQueue.add(ctx, s.convKey, if (files.isNotEmpty() && body.startsWith("📎 ")) "" else body,
+                                addresses = s.addresses.split(',').filter { it.isNotBlank() }, uris = files)
+                            dao.setScheduled(s.id, "sent")
+                            runCatching { com.yatesv.contacthub.engine.RecurringTexts.afterSent(s.copy(body = body)) }
+                        }
+                    }, enabled = body.isNotBlank()) { Text("Send now") }
+                    TextButton({
+                        editing = null
+                        scope.launch { Hub.db.dao().updateScheduledBody(s.id, body.trim()) }
+                    }, enabled = body.isNotBlank() && body != s.body) { Text("Save") }
+                } },
+                dismissButton = { TextButton({ editing = null; Nav.go(Screen.Chat(s.convKey)) }) { Text("Open chat") } },
+            )
+        }
     }
 }
+
+private fun Modifier.androidx_selectable(selected: Boolean, onClick: () -> Unit): Modifier =
+    this.then(Modifier.selectable(selected = selected, role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick))
+
+private fun Modifier.semanticsUnread(unread: Boolean): Modifier =
+    if (!unread) this else this.then(Modifier.semantics { stateDescription = "Unread" })

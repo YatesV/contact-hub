@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import com.yatesv.contacthub.Hub
@@ -86,6 +87,12 @@ object Nav {
     /** true = last move went deeper (slide in from the right), false = went back. */
     var forward by mutableStateOf(true)
     fun go(s: Screen) { forward = true; stack.add(s) }
+    /** Open a chat scrolled to one message (from Search / Starred): msg key, text and time to find it by. */
+    data class Jump(val msgKey: String, val body: String, val date: Long)
+    val jumps = java.util.concurrent.ConcurrentHashMap<String, Jump>()
+    /** People already picked when New chat opens (changing a group's members starts a new group). */
+    var newChatPrefill: List<String> = emptyList()
+    fun openAt(convKey: String, msgKey: String, body: String, date: Long) { jumps[convKey] = Jump(msgKey, body, date); go(Screen.Chat(convKey)) }
     fun back(): Boolean = if (stack.size > 1) { forward = false; stack.removeAt(stack.lastIndex); true } else false
     fun replace(s: Screen) { forward = true; if (stack.size > 1) stack[stack.lastIndex] = s else stack.add(s) }
     /** Text to put in the box when a chat opens (from another app's "send SMS" link). */
@@ -142,6 +149,8 @@ class MainActivity : FragmentActivity() {
         val s = Hub.settings.value
         com.yatesv.contacthub.engine.AppState.foreground = true
         com.yatesv.contacthub.engine.MockStore.resumeIfNeeded(this)
+        // Messages waiting to go over RCS can go now that Orbit is open
+        com.yatesv.contacthub.engine.SendQueue.wakeHeld(this, drive = true)
         if (s.appLock && Nav.pausedAt > 0 && System.currentTimeMillis() - Nav.pausedAt > s.lockAfterSec * 1000L) {
             Nav.locked = true
             Nav.hiddenUnlocked = false
@@ -234,7 +243,11 @@ fun AppRoot() {
     val s by Hub.settings.flow.collectAsState()
     val effect by Effects.current.collectAsState()
     AppOpenFold(enabled = s.transition == "fold" && Motion.enabled(s), intensity = s.foldIntensity) {
-    androidx.compose.animation.SharedTransitionLayout(Modifier.fillMaxSize()) {
+    // Shared elements (flying avatars) need the root placed once first. A chat opened as the very
+    // first screen (notification tap on cold start, app unlock, widget, smsto: link) would otherwise
+    // measure its avatar before the root has coordinates -> "Uninitialized LayoutCoordinates" crash.
+    var sharedReady by androidx.compose.runtime.remember { mutableStateOf(false) }
+    androidx.compose.animation.SharedTransitionLayout(Modifier.fillMaxSize().onPlaced { if (!sharedReady) sharedReady = true }) {
     val shared = this
     AnimatedContent(
         targetState = Nav.top,
@@ -242,7 +255,7 @@ fun AppRoot() {
         label = "screens",
         modifier = Modifier.fillMaxSize(),
     ) { top ->
-        androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides shared, LocalScreenScope provides this) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalSharedScope provides (if (sharedReady) shared else null), LocalScreenScope provides this) {
         val foldMod = if (s.transition == "fold" && Motion.enabled(s)) Modifier.foldScreen(this, Nav.forward, s.foldIntensity) else Modifier
         Box(Modifier.fillMaxSize().then(foldMod).background(MaterialTheme.colorScheme.background)) {
         when (top) {
@@ -269,6 +282,7 @@ fun AppRoot() {
     }
     }
     effect?.let { e -> EffectOverlay(e) { Effects.current.value = null } }
+    MediaViewerOverlay()
 }
 
 /** iOS-style push: new screen slides in from the right, old one slides a bit left and dims. */

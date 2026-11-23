@@ -37,7 +37,9 @@ import java.security.SecureRandom
  * Open the address in a browser, type the 6-digit code, and read/send texts from your laptop.
  */
 object WebLink {
-    data class State(val on: Boolean = false, val url: String = "", val pin: String = "", val clients: Int = 0)
+    data class State(val on: Boolean = false, val url: String = "", val pin: String = "", val clients: Int = 0,
+                     /** Encrypted (HTTPS); fingerprint of the phone's certificate to check in the browser */
+                     val secure: Boolean = false, val fingerprint: String = "")
     val state = MutableStateFlow(State())
     const val PORT = 8765
     private val rnd = SecureRandom()
@@ -68,6 +70,9 @@ object WebLink {
 class WebLinkService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> HubLog.w("WebLink", "job failed", e); CrashLog.caught("Laptop link", e) })
     private var server: ServerSocket? = null
+    /** HTTPS when the phone supports it, so the code and your texts aren't readable by others on the Wi-Fi */
+    private var tls: javax.net.ssl.SSLServerSocketFactory? = null
+    private var tlsTried = false
     private var idle: kotlinx.coroutines.Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -81,9 +86,11 @@ class WebLinkService : Service() {
         val stop = PendingIntent.getService(this, 7501, Intent(this, WebLinkService::class.java).setAction("stop"), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         if (intent?.action == "stop") { WebLink.stop(this); return START_NOT_STICKY }
         val ip = WebLink.ipAddress(this)
-        val url = if (ip != null) "http://$ip:${WebLink.PORT}" else ""
         if (WebLink.state.value.pin.isBlank()) { stopSelf(); return START_NOT_STICKY } // restarted without a session
-        WebLink.state.value = WebLink.state.value.copy(on = true, url = url)
+        if (tls == null && !tlsTried) { tlsTried = true; tls = WebTls.serverSocketFactory() }
+        val secure = tls != null
+        val url = if (ip != null) "${if (secure) "https" else "http"}://$ip:${WebLink.PORT}" else ""
+        WebLink.state.value = WebLink.state.value.copy(on = true, url = url, secure = secure, fingerprint = if (secure) WebTls.fingerprint() else "")
         val n = NotificationCompat.Builder(this, ch).setSmallIcon(R.drawable.ic_tile).setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setContentTitle("Laptop access is on").setContentText(if (url.isBlank()) "Connect to Wi-Fi" else "$url · code ${WebLink.state.value.pin}")
@@ -101,7 +108,8 @@ class WebLinkService : Service() {
         runCatching {
             // Only on the Wi-Fi address (never on mobile data, which can also hand out 10.x addresses)
             val ip = WebLink.ipAddress(this) ?: return
-            ServerSocket(WebLink.PORT, 16, java.net.InetAddress.getByName(ip)).use { ss ->
+            val addr = java.net.InetAddress.getByName(ip)
+            (tls?.createServerSocket(WebLink.PORT, 16, addr) ?: ServerSocket(WebLink.PORT, 16, addr)).use { ss ->
                 server = ss
                 while (scope.isActive) {
                     val sock = ss.accept()
@@ -203,7 +211,8 @@ class WebLinkService : Service() {
     private fun respond(sock: Socket, code: Int, type: String, body: String) {
         val bytes = body.toByteArray()
         val head = "HTTP/1.1 $code ${if (code == 200) "OK" else "Error"}\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\n" +
-            "Cache-Control: no-store\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
+            "Cache-Control: no-store\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n" +
+            (if (sock is javax.net.ssl.SSLSocket) "Strict-Transport-Security: max-age=600\r\n" else "") + "\r\n"
         sock.getOutputStream().apply { write(head.toByteArray()); write(bytes); flush() }
     }
 

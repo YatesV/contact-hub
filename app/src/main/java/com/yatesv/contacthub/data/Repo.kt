@@ -34,6 +34,10 @@ data class Msg(
     /** 0 = sent/received, 1 = sending, 2 = failed */
     val status: Int = 0,
     val rcs: Boolean = false,
+    /** The carrier confirmed it reached their phone (SMS delivery report) */
+    val delivered: Boolean = false,
+    /** SIM it went through / came in on (dual SIM), -1 = unknown */
+    val subId: Int = -1,
 )
 
 data class ContactInfo(
@@ -43,6 +47,7 @@ data class ContactInfo(
     val number: String,
     val photo: String?,
     val starred: Boolean,
+    val mobile: Boolean = false,
 )
 
 data class CallEntry(val id: Long, val number: String, val date: Long, val duration: Long, val type: Int, val name: String?)
@@ -84,7 +89,7 @@ class SmsRepo(private val ctx: Context) {
      * different, empty thread on some phones.
      */
     suspend fun threadIdFor(key: String): Long = withContext(Dispatchers.IO) {
-        if (key.startsWith("g:") || key.isBlank()) return@withContext 0L
+        if (Phone.isNameKey(key) || key.isBlank()) return@withContext 0L
         threadIds[key]?.let { return@withContext it }
         conversations(includeOld = true)
         threadIds[key]?.let { return@withContext it }
@@ -149,10 +154,6 @@ class SmsRepo(private val ctx: Context) {
         return out
     }
 
-    /** Find the SMS thread for some phone numbers (for chats started from a contact). */
-    fun threadFor(addresses: List<String>): Long =
-        runCatching { Telephony.Threads.getOrCreateThreadId(ctx, addresses.toSet()) }.getOrDefault(0L)
-
     /**
      * Newest [limit] messages of a thread. Fast path: one query for SMS, one for MMS, ONE query for
      * all MMS parts together, and sender lookups only for group picture messages.
@@ -160,11 +161,14 @@ class SmsRepo(private val ctx: Context) {
     suspend fun messages(threadId: Long, limit: Int = 80, group: Boolean = false): List<Msg> = withContext(Dispatchers.IO) {
         if (threadId <= 0) return@withContext emptyList()
         val sms = runCatching { cr.query(
-            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type"),
+            Telephony.Sms.CONTENT_URI, arrayOf("_id", "address", "body", "date", "type", "status", "sub_id"),
             "thread_id = ?", arrayOf(threadId.toString()), "date DESC",
         ).rows(limit) { c ->
             val type = c.int("type")
             Msg(
+                delivered = type == Telephony.Sms.MESSAGE_TYPE_SENT && c.int("status") == Telephony.Sms.STATUS_COMPLETE &&
+                    c.getColumnIndex("status").let { it >= 0 && !c.isNull(it) },
+                subId = c.getColumnIndex("sub_id").let { if (it >= 0 && !c.isNull(it)) c.getInt(it) else -1 },
                 key = "s:${c.long("_id")}", body = c.str("body"), date = c.long("date"),
                 outgoing = type != Telephony.Sms.MESSAGE_TYPE_INBOX, sender = c.str("address"),
                 status = when (type) {
@@ -211,14 +215,17 @@ class SmsRepo(private val ctx: Context) {
     /** All photos/videos sent back and forth in a thread. */
     suspend fun media(threadId: Long): List<Pair<Long, Attachment>> = withContext(Dispatchers.IO) {
         if (threadId <= 0) return@withContext emptyList()
-        cr.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "date"), "thread_id = ?", arrayOf(threadId.toString()), "date DESC")
-            .rows { it.long("_id") to it.long("date") * 1000 }
-            .flatMap { (id, date) ->
-                cr.query(Uri.parse("content://mms/part"), arrayOf("_id", "ct"), "mid = ?", arrayOf(id.toString()), null)
-                    .rows { c -> c.str("ct") to c.long("_id") }
-                    .filter { it.first.startsWith("image/") || it.first.startsWith("video/") }
-                    .map { date to Attachment(Uri.parse("content://mms/part/${it.second}"), it.first) }
-            }
+        val dates = cr.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "date"), "thread_id = ?", arrayOf(threadId.toString()), "date DESC")
+            .rows { it.long("_id") to it.long("date") * 1000 }.toMap(LinkedHashMap())
+        if (dates.isEmpty()) return@withContext emptyList()
+        // One query for every photo/video part in the chat (it used to be one query per message)
+        val parts = dates.keys.chunked(500).flatMap { ids ->
+            cr.query(Uri.parse("content://mms/part"), arrayOf("_id", "mid", "ct"),
+                "(ct LIKE 'image/%' OR ct LIKE 'video/%') AND mid IN (${ids.joinToString(",")})", null, null)
+                .rows { c -> Triple(c.long("mid"), c.long("_id"), c.str("ct")) }
+        }
+        parts.sortedByDescending { dates[it.first] ?: 0 }
+            .map { (mid, id, ct) -> (dates[mid] ?: 0L) to Attachment(Uri.parse("content://mms/part/$id"), ct) }
     }
 
     /** Message count + days with messages, for contact stats. */
@@ -243,19 +250,37 @@ class SmsRepo(private val ctx: Context) {
         }.getOrDefault(emptyList())
     }
 
-    data class SearchHit(val threadId: Long, val address: String, val msg: Msg)
+    /** [key] = the chat it's in, when known (group and picture messages). */
+    data class SearchHit(val threadId: Long, val address: String, val msg: Msg, val key: String = "")
 
     suspend fun search(q: String): List<SearchHit> = withContext(Dispatchers.IO) {
         if (q.isBlank()) return@withContext emptyList()
-        cr.query(
+        val pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        val sms = cr.query(
             Telephony.Sms.CONTENT_URI, arrayOf("_id", "thread_id", "address", "body", "date", "type"),
-            "body LIKE ? ESCAPE '\\'", arrayOf("%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"), "date DESC",
+            "body LIKE ? ESCAPE '\\'", arrayOf(pattern), "date DESC",
         ).rows(200) { c ->
             SearchHit(
                 c.long("thread_id"), c.str("address"),
                 Msg("s:${c.long("_id")}", c.str("body"), c.long("date"), c.int("type") != 1, c.str("address")),
             )
         }
+        // Group texts and photo captions live in MMS text parts
+        if (threadIds.isEmpty()) runCatching { conversations(includeOld = true) }
+        val byThread = threadIds.entries.associate { (k, v) -> v to k }
+        val mms = runCatching {
+            cr.query(Uri.parse("content://mms/part"), arrayOf("mid", "text"), "ct = 'text/plain' AND text LIKE ? ESCAPE '\\'", arrayOf(pattern), null)
+                .rows(200) { it.long("mid") to it.str("text") }
+                .mapNotNull { (mid, text) ->
+                    cr.query(Telephony.Mms.CONTENT_URI, arrayOf("thread_id", "date", "msg_box"), "_id = ?", arrayOf(mid.toString()), null)
+                        .rows(1) { c -> Triple(c.long("thread_id"), c.long("date") * 1000, c.int("msg_box") != Telephony.Mms.MESSAGE_BOX_INBOX) }
+                        .firstOrNull()?.let { (thread, date, out) ->
+                            val key = byThread[thread] ?: return@let null
+                            SearchHit(thread, "", Msg("m:$mid", text, date, out), key)
+                        }
+                }
+        }.getOrDefault(emptyList())
+        (sms + mms).sortedByDescending { it.msg.date }
     }
 
     /** Raw SMS dump for backups. */
@@ -265,6 +290,28 @@ class SmsRepo(private val ctx: Context) {
                 mapOf("address" to c.str("address"), "body" to c.str("body"), "date" to c.long("date"),
                     "type" to c.int("type"), "read" to c.int("read"))
             }
+    }
+
+    /** Puts backed-up texts that aren't on this phone back into its SMS database (default texting app only). Returns how many. */
+    suspend fun restoreSms(list: List<org.json.JSONObject>): Int = withContext(Dispatchers.IO) {
+        val have = cr.query(Telephony.Sms.CONTENT_URI, arrayOf("address", "body", "date"), null, null, null)
+            .rows { c -> "${Phone.norm(c.str("address"))}|${c.long("date")}|${c.str("body")}" }.toHashSet()
+        val threads = HashMap<String, Long>()
+        var added = 0
+        for (o in list) {
+            val address = o.optString("address"); val body = o.optString("body"); val date = o.optLong("date")
+            if (address.isBlank() || !have.add("${Phone.norm(address)}|$date|$body")) continue
+            val thread = threads.getOrPut(Phone.norm(address)) { runCatching { Telephony.Threads.getOrCreateThreadId(ctx, address) }.getOrDefault(0L) }
+            val ok = runCatching {
+                cr.insert(Telephony.Sms.CONTENT_URI, android.content.ContentValues().apply {
+                    put(Telephony.Sms.ADDRESS, address); put(Telephony.Sms.BODY, body); put(Telephony.Sms.DATE, date)
+                    put(Telephony.Sms.TYPE, o.optInt("type", Telephony.Sms.MESSAGE_TYPE_INBOX)); put(Telephony.Sms.READ, o.optInt("read", 1))
+                    put(Telephony.Sms.SEEN, 1); if (thread > 0) put(Telephony.Sms.THREAD_ID, thread)
+                }) != null
+            }.getOrDefault(false)
+            if (ok) added++
+        }
+        added
     }
 }
 
@@ -283,6 +330,7 @@ class ContactsRepo(private val ctx: Context) {
                     ContactsContract.CommonDataKinds.Phone.NUMBER,
                     ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI,
                     ContactsContract.CommonDataKinds.Phone.STARRED,
+                    ContactsContract.CommonDataKinds.Phone.TYPE,
                 ),
                 null, null, ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE NOCASE",
             ).rows { c ->
@@ -293,19 +341,30 @@ class ContactsRepo(private val ctx: Context) {
                     c.str(ContactsContract.CommonDataKinds.Phone.NUMBER),
                     c.str(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI).ifBlank { null },
                     c.int(ContactsContract.CommonDataKinds.Phone.STARRED) == 1,
+                    c.int(ContactsContract.CommonDataKinds.Phone.TYPE) == ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE,
                 )
             }
         }.getOrDefault(emptyList())
         index = list.associateBy { Phone.norm(it.number) }
+        ready = true
         list
     }
+
+    /** True once contacts have been read at least once (notifications wait for this before matching names). */
+    @Volatile var ready = false
+        private set
 
     fun cached(number: String): ContactInfo? = index[Phone.norm(number)]
 
     /** Find a contact by name (used to match RCS notifications, which only show names). */
-    fun byName(name: String): ContactInfo? = index.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    fun byName(name: String): ContactInfo? {
+        val hits = index.values.filter { it.name.equals(name, ignoreCase = true) }
+        // Two different people with the same name: don't guess (a reply could go to the wrong one)
+        if (hits.map { it.id }.distinct().size != 1) return null
+        // Their mobile number, not a work line or landline
+        return hits.firstOrNull { it.mobile } ?: hits.first()
+    }
 
-    fun allNumbers(contactId: Long): List<String> = index.values.filter { it.id == contactId }.map { it.number }
 
     suspend fun birthday(contactId: Long): String? = withContext(Dispatchers.IO) {
         runCatching {
@@ -324,7 +383,7 @@ class ContactsRepo(private val ctx: Context) {
                 CallLog.Calls.CONTENT_URI,
                 arrayOf(CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME),
                 null, null, CallLog.Calls.DATE + " DESC",
-            ).rows { c ->
+            ).rows(if (number == null) limit else 5000) { c ->
                 CallEntry(c.long(CallLog.Calls._ID), c.str(CallLog.Calls.NUMBER), c.long(CallLog.Calls.DATE),
                     c.long(CallLog.Calls.DURATION), c.int(CallLog.Calls.TYPE), c.str(CallLog.Calls.CACHED_NAME).ifBlank { null })
             }

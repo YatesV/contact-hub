@@ -37,14 +37,19 @@ class ScheduleWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
             if (dao.claimScheduled(s.id) == 0) continue
             inFlight += s.id
             try {
-            // Background: never open Google Messages over whatever you're doing
-            val r = Sender.send(applicationContext, s.convKey, s.body, s.addresses.split(',').filter { it.isNotBlank() }, allowDriving = false)
-            dao.setScheduled(s.id, if (r.ok) "sent" else "failed")
-            // Repeating texts: schedule the next one (even if this one failed, so a yearly text isn't lost)
+            // Background: never open Google Messages over whatever you're doing. It goes through the
+            // send queue, which holds it for RCS (unlock / open Orbit) instead of falling back to SMS.
+            val files = Hub.orbit.scheduleFiles(s.id)
+            SendQueue.add(applicationContext, s.convKey, if (files.isNotEmpty() && s.body.startsWith("📎 ")) "" else s.body, drive = false, background = true,
+                addresses = s.addresses.split(',').filter { it.isNotBlank() }, uris = files)
+            dao.setScheduled(s.id, "sent")
+            // Repeating texts: schedule the next one
             runCatching { RecurringTexts.afterSent(s) }
-            if (!r.ok) Notifier.status(applicationContext, s.id.toInt(), "Scheduled message not sent", r.error)
             } finally { inFlight -= s.id }
         }
+        // Always arm the next one, so nothing waits for a reboot (e.g. after a restore)
+        dao.allScheduled().filter { it.status == "waiting" && it.sendAt > System.currentTimeMillis() }.minByOrNull { it.sendAt }
+            ?.let { enqueue(applicationContext, it.sendAt - System.currentTimeMillis()) }
         Hub.changed()
         return Result.success()
     }
@@ -67,10 +72,10 @@ class ReplyWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
     override suspend fun doWork(): Result {
         val key = inputData.getString("conv") ?: return Result.failure()
         val text = inputData.getString("text") ?: return Result.failure()
-        // From a notification you're not looking at the app, so don't pop Google Messages open
-        val r = Sender.send(applicationContext, key, text, allowDriving = false)
+        // From a notification you're not looking at the app, so don't pop Google Messages open.
+        // The queue sends it right away through the reply button, or holds it for RCS.
+        SendQueue.add(applicationContext, key, text, drive = false, background = true)
         com.yatesv.contacthub.engine.ActionReceiver.markRead(key)
-        if (!r.ok) Notifier.status(applicationContext, key.hashCode(), "Reply not sent", r.error)
         return Result.success()
     }
 
@@ -101,7 +106,7 @@ class Life360Worker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p)
     }
 }
 
-/** Daily backup of everything Orbit stores, plus a copy of your texts. Keeps the last 7. */
+/** Daily backup of Orbit's data plus a copy of your SMS texts (not photos). Keeps the last 7, also in Downloads/Orbit. */
 class BackupWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
     override suspend fun doWork(): Result = runCatching {
         Backup.writeDaily(applicationContext); Result.success()
@@ -123,7 +128,7 @@ object Backup {
                 put("bubbleColor", m.bubbleColor); put("soundUri", m.soundUri); put("lastRead", m.lastRead); put("engine", m.engine)
             } }))
             put("local", arr(dao.allLocal().map { m -> JSONObject().apply {
-                put("convKey", m.convKey); put("body", m.body); put("date", m.date); put("outgoing", m.outgoing)
+                put("id", m.id); put("convKey", m.convKey); put("body", m.body); put("date", m.date); put("outgoing", m.outgoing)
                 put("sender", m.sender); put("source", m.source)
             } }))
             put("reactions", arr(dao.allReactions().map { r -> JSONObject().apply {
@@ -165,8 +170,32 @@ object Backup {
                 .onFailure { com.yatesv.contacthub.data.HubLog.w("Backup", "Drive write failed", it) }
         }
         dir(ctx).listFiles()?.filter { it.name.startsWith("contacthub-") }?.sortedByDescending { it.name }?.drop(7)?.forEach { it.delete() }
+        // A copy in Downloads/Orbit too: Orbit's own folder is wiped if Orbit is uninstalled, this one isn't
+        runCatching { copyToDownloads(ctx, name, json) }.onFailure { com.yatesv.contacthub.data.HubLog.w("Backup", "Downloads copy failed", it) }
         Hub.settings.update { it.copy(lastBackup = System.currentTimeMillis()) }
         return f
+    }
+
+    private const val DOWNLOADS_DIR = "Download/Orbit/"
+
+    /** Today's backup in Downloads/Orbit (replaced if it already exists), keeping the newest 7. */
+    private fun copyToDownloads(ctx: Context, name: String, json: String) {
+        val cr = ctx.contentResolver
+        val col = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val mine = ArrayList<Pair<Long, String>>()
+        cr.query(col, arrayOf(android.provider.MediaStore.MediaColumns._ID, android.provider.MediaStore.MediaColumns.DISPLAY_NAME),
+            "${android.provider.MediaStore.MediaColumns.RELATIVE_PATH} = ?", arrayOf(DOWNLOADS_DIR), null)?.use { c ->
+            while (c.moveToNext()) mine += c.getLong(0) to c.getString(1).orEmpty()
+        }
+        val today = mine.firstOrNull { it.second == name }?.first
+        val uri = today?.let { android.content.ContentUris.withAppendedId(col, it) } ?: cr.insert(col, android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, DOWNLOADS_DIR)
+        }) ?: return
+        cr.openOutputStream(uri, "wt")?.use { it.write(json.toByteArray()) }
+        mine.filter { it.second.startsWith("contacthub-") && it.second != name }.sortedByDescending { it.second }.drop(6)
+            .forEach { (id, _) -> runCatching { cr.delete(android.content.ContentUris.withAppendedId(col, id), null, null) } }
     }
 
     suspend fun exportTo(ctx: Context, uri: Uri) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -190,26 +219,56 @@ object Backup {
         j.objs("meta").forEach { o -> dao.putMeta(ConvMeta(o.getString("key"), o.optBoolean("pinned"), o.optBoolean("archived"),
             o.optBoolean("muted"), o.optBoolean("hidden"), o.optLong("folderId"), o.optString("customName"), o.optString("photoUri"),
             o.optString("wallpaperUri"), o.optInt("bubbleColor"), o.optString("soundUri"), o.optLong("lastRead"), o.optString("engine", "auto"))) }
-        val existing = dao.allLocal().map { it.convKey + it.date + it.body }.toSet()
+        // Message ids change on a restore: remember old "l:<id>" -> new so hidden messages still point at the right ones
+        val idMap = HashMap<String, String>()
+        val existing = dao.allLocal().associateBy { it.convKey + it.date + it.body }
         j.objs("local").forEach { o ->
             val m = LocalMessage(convKey = o.getString("convKey"), body = o.optString("body"), date = o.optLong("date"),
                 outgoing = o.optBoolean("outgoing"), sender = o.optString("sender"), source = o.optString("source", "rcs"))
-            if (m.convKey + m.date + m.body !in existing) dao.addLocal(m)
+            val newId = existing[m.convKey + m.date + m.body]?.id ?: dao.addLocal(m)
+            if (o.has("id")) idMap["l:${o.getLong("id")}"] = "l:$newId"
         }
-        j.objs("reactions").forEach { o -> dao.addReaction(Reaction(convKey = o.getString("convKey"), msgKey = o.getString("msgKey"),
-            msgBody = o.optString("msgBody"), emoji = o.getString("emoji"), fromMe = o.optBoolean("fromMe"), pending = o.optBoolean("pending"),
-            date = o.optLong("date"))) }
+        // Reactions are matched to messages by text, not by ids (phone message ids differ on a new phone).
+        // Skipped if already there, so restoring twice doesn't double them.
+        val haveReactions = dao.allReactions().map { "${it.convKey}|${it.msgBody}|${it.emoji}|${it.fromMe}" }.toHashSet()
+        j.objs("reactions").forEach { o ->
+            val body = o.optString("msgBody")
+            val old = o.getString("msgKey")
+            val r = Reaction(convKey = o.getString("convKey"), msgKey = if (old.startsWith("q:") || body.isBlank()) old else "q:$body",
+                msgBody = body, emoji = o.getString("emoji"), fromMe = o.optBoolean("fromMe"), pending = o.optBoolean("pending"), date = o.optLong("date"))
+            if (haveReactions.add("${r.convKey}|${r.msgBody}|${r.emoji}|${r.fromMe}")) dao.addReaction(r)
+        }
         j.objs("starred").forEach { o -> dao.star(Starred(o.getString("msgKey"), o.optString("convKey"), o.optString("body"), o.optLong("date"))) }
-        j.objs("scheduled").forEach { o -> if (o.optLong("sendAt") > System.currentTimeMillis()) {
+        val haveScheduled = dao.allScheduled().filter { it.status == "waiting" }.map { "${it.convKey}|${it.sendAt}|${it.body}" }.toHashSet()
+        j.objs("scheduled").forEach { o -> if (o.optLong("sendAt") > System.currentTimeMillis() &&
+                haveScheduled.add("${o.getString("convKey")}|${o.optLong("sendAt")}|${o.optString("body")}")) {
             val id = dao.schedule(Scheduled(convKey = o.getString("convKey"), addresses = o.optString("addresses"), body = o.optString("body"), sendAt = o.optLong("sendAt")))
             // Repeat rules travel with the message (the old IDs mean nothing after a restore)
             o.optString("repeat").takeIf { it.isNotBlank() }?.let { Hub.orbit.setRepeat(id, it) }
+            // Each one armed for its own time (one "run now" used to leave future ones waiting for a reboot)
+            ScheduleWorker.enqueue(ctx, o.optLong("sendAt") - System.currentTimeMillis())
         } }
         j.objs("folders").forEach { o -> dao.addFolder(Folder(o.optLong("id"), o.optString("name"), o.optInt("sort"))) }
         j.objs("extras").forEach { o -> dao.putExtra(ContactExtra(o.getString("phoneKey"), o.optString("instagram"), o.optString("snapchat"),
             o.optString("tiktok"), o.optString("notes"), o.optString("birthday"), o.optString("life360Id"), o.optBoolean("priority"), o.optInt("groupColor"))) }
         j.objs("groups").forEach { o -> dao.putGroup(GroupInfo(o.getString("convKey"), o.optString("name"), o.optString("photoUri"))) }
-        j.optJSONObject("orbit")?.let { o -> o.remove("repeat"); Hub.orbit.importJson(o) }
+        j.optJSONObject("orbit")?.let { o ->
+            o.remove("repeat")
+            // Hidden messages: swap old local ids for the new ones; drop ones that no longer exist
+            o.optJSONObject("hidden")?.let { h ->
+                val fixed = JSONObject()
+                h.keys().forEach { conv ->
+                    val a = h.optJSONArray(conv) ?: return@forEach
+                    fixed.put(conv, JSONArray((0 until a.length()).map { a.getString(it) }.mapNotNull { k -> if (k.startsWith("l:")) idMap[k] else k }))
+                }
+                o.put("hidden", fixed)
+            }
+            Hub.orbit.importJson(o)
+        }
+        // Texts: only the default texting app can write them back
+        val sms = j.objs("sms")
+        var smsRestored = 0
+        if (sms.isNotEmpty() && HubSms.isDefault(ctx)) smsRestored = runCatching { Hub.sms.restoreSms(sms) }.getOrElse { com.yatesv.contacthub.data.HubLog.w("Backup", "sms restore failed", it); 0 }
         Arrivals.syncAll(ctx)
         MockStore.load()
         j.optJSONArray("mockFavorites")?.let { a ->
@@ -221,6 +280,10 @@ object Backup {
         }
         ScheduleWorker.enqueue(ctx, 0)
         Hub.changed()
-        return "Restored"
+        return when {
+            sms.isEmpty() -> "Restored"
+            HubSms.isDefault(ctx) -> "Restored (and $smsRestored texts that were missing)"
+            else -> "Restored. To bring back texts too, make Orbit your default texting app and restore again."
+        }
     }
 }

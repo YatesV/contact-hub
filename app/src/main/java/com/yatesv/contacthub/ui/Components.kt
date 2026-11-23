@@ -150,7 +150,7 @@ fun ColorRow(title: String, selected: Int, allowAuto: Boolean = true, onSelect: 
 }
 
 @Composable
-fun Banner(text: String, action: String? = null, onAction: () -> Unit = {}, onClose: () -> Unit) {
+fun Banner(text: String, action: String? = null, onAction: () -> Unit = {}, onClose: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.tertiaryContainer).padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
@@ -158,7 +158,8 @@ fun Banner(text: String, action: String? = null, onAction: () -> Unit = {}, onCl
     ) {
         Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
         if (action != null) androidx.compose.material3.TextButton(onAction) { Text(action) }
-        androidx.compose.material3.TextButton(onClose) { Text("✕") }
+        // No ✕ when there's nothing to dismiss (it used to show and do nothing)
+        if (onClose != null) androidx.compose.material3.TextButton(onClose) { Text("✕") }
     }
 }
 

@@ -106,6 +106,15 @@
         </activity>
 
         <!-- App icon: Orbit (pick in Settings → Look & feel → App icon) -->
+        <!-- A chat in a floating bubble -->
+        <activity
+            android:name=".ui.BubbleActivity"
+            android:exported="false"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="always"
+            android:windowSoftInputMode="adjustResize" />
+
         <activity-alias
             android:name=".IconOrbit"
             android:targetActivity=".ui.MainActivity"

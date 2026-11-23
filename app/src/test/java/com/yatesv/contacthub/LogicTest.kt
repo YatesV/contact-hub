@@ -25,6 +25,22 @@ class LogicTest {
         assertEquals("(337) 555-0101", Phone.pretty("+13375550101"))
     }
 
+    @Test fun keepsInternationalNumbersWhole() {
+        assertEquals("+447911123456", Phone.norm("+44 7911 123456"))
+        assertEquals("+447911123456", Phone.norm("011 44 7911 123456"))
+        assertEquals("+447911123456", Phone.norm("0044 7911 123456"))
+        assertEquals(listOf("+447911123456"), Phone.addresses(Phone.convKey(listOf("+44 7911 123456"))))
+    }
+
+    @Test fun nameKeys() {
+        assertTrue(Phone.isNameKey("n:~Brad T"))
+        assertTrue(!Phone.isGroupKey("n:~Brad T"))
+        assertTrue(Phone.isGroupKey("g:Family#sc1a2b"))
+        assertEquals("Family", Phone.nameOf("g:Family#sc1a2b"))
+        assertEquals("~Brad T", Phone.nameOf("n:~Brad T"))
+        assertEquals(emptyList<String>(), Phone.addresses("n:~Brad T"))
+    }
+
     @Test fun parsesIphoneReactions() {
         val r = Reactions.parse("Liked “see you at 8”")!!
         assertEquals("👍", r.emoji); assertEquals("see you at 8", r.target)

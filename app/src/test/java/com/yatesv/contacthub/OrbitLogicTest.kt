@@ -35,6 +35,12 @@ class OrbitLogicTest {
         assertEquals(at(2027, 11, 20, 9), nextYear)
         assertEquals(at(2026, 1, 8, 9), Recurring.next(at(2026, 1, 1, 9), "weekly", now = at(2026, 1, 1, 9), tz = tz))
         assertNull(Recurring.next(first, "", now = first, tz = tz))
+        // Monthly on the 31st: Feb 28, then back to Mar 31 (not stuck on the 28th)
+        val rule = Recurring.anchored("monthly", at(2026, 1, 31, 9), tz)
+        val feb = Recurring.next(at(2026, 1, 31, 9), rule, now = at(2026, 1, 31, 9), tz = tz)!!
+        assertEquals(at(2026, 2, 28, 9), feb)
+        assertEquals(at(2026, 3, 31, 9), Recurring.next(feb, rule, now = feb, tz = tz))
+        assertEquals("Every month", Recurring.label(rule))
     }
 
     @Test fun birthdays() {
